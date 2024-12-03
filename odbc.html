@@ -175,116 +175,116 @@
     </div>
 </script>
 <script type="text/markdown" data-help-name="odbc config">
-    A configuration node that manages connections in an `odbc.pool` object. 
-    [Can take any configuration property recognized by `odbc.pool()`](https://www.npmjs.com/package/odbc/v/2.4.8#constructor-odbcconnectconnectionstring). 
-    The connection pool will initialize the first time an `odbc` node receives an input message.
+A configuration node that manages connections in an `odbc.pool` object. 
+[Can take any configuration property recognized by `odbc.pool()`](https://www.npmjs.com/package/odbc/v/2.4.8#constructor-odbcconnectconnectionstring). 
+The connection pool will initialize the first time an `odbc` node receives an input message.
 
-    ## Properties
+## Properties
 
-    * (**required**) **`connectionString`**: <`string`>
+* (**required**) **`connectionString`**: <`string`>
 
-        An ODBC connection string that defines your DSN and/or connection string options. 
-        Check your ODBC driver documentation for more information about valid connection strings.
+    An ODBC connection string that defines your DSN and/or connection string options. 
+    Check your ODBC driver documentation for more information about valid connection strings.
 
-        Example:
-        ```
-        DSN=MyDSN;DFT=2;
-        ```
+    Example:
+    ```
+    DSN=MyDSN;DFT=2;
+    ```
 
-    * (optional) **`initialSize`**: <`number`>
+* (optional) **`initialSize`**: <`number`>
 
-        The number of connections created in the pool when it is initialized. Default: 5.
+    The number of connections created in the pool when it is initialized. Default: 5.
 
-    * (optional) **`incrementSize`**: <`number`>
+* (optional) **`incrementSize`**: <`number`>
 
-        The number of connections that are created when the pool is exhausted. Default: 5.
+    The number of connections that are created when the pool is exhausted. Default: 5.
 
-    * (optional) **`maxSize`**: <`number`>
+* (optional) **`maxSize`**: <`number`>
 
-        The maximum number of connections allowed in the pool before it won't create any more. Default: 15.
+    The maximum number of connections allowed in the pool before it won't create any more. Default: 15.
 
-    * (optional) **`shrinkPool`**: <`boolean`>
+* (optional) **`shrinkPool`**: <`boolean`>
 
-        Whether the number of connections should be reduced to `initialSize` when they are returned to the pool. Default: true.
+    Whether the number of connections should be reduced to `initialSize` when they are returned to the pool. Default: true.
 
-    * (optional) **`connectionTimeout`**: <`number`>
+* (optional) **`connectionTimeout`**: <`number`>
 
-        The number of seconds for a connection to remain idle before closing. Default: 3.
+    The number of seconds for a connection to remain idle before closing. Default: 3.
 
-    * (optional) **`loginTimeout`**: <`number`>
+* (optional) **`loginTimeout`**: <`number`>
 
-        The number of seconds for an attempt to create a connection before returning to the application. Default: 3.
+    The number of seconds for an attempt to create a connection before returning to the application. Default: 3.
 
-    * (optional) **`syntaxChecker`**: <`boolean`>
+* (optional) **`syntaxChecker`**: <`boolean`>
 
-        Whether the syntax validator is activated or not. If activated, the query string will be 
-        [parsed](https://www.npmjs.com/package/node-sql-parser#create-ast-for-sql-statement) 
-        and appended as an object to the output message with a key named `parsedQuery`. Default: false.
+    Whether the syntax validator is activated or not. If activated, the query string will be 
+    [parsed](https://www.npmjs.com/package/node-sql-parser#create-ast-for-sql-statement) 
+    and appended as an object to the output message with a key named `parsedQuery`. Default: false.
 
-    * (optional) **`syntax`**: <`string`>
+* (optional) **`syntax`**: <`string`>
 
-        Dropdown list of the available [SQL flavors available](https://www.npmjs.com/package/node-sql-parser#supported-database-sql-syntax). 
-        Default: mysql.
+    Dropdown list of the available [SQL flavors available](https://www.npmjs.com/package/node-sql-parser#supported-database-sql-syntax). 
+    Default: mysql.
 </script>
 
 <script type="text/markdown" data-help-name="odbc">
-    A node that runs a query when input is received. Each instance of the node can define its own query string, 
-    as well as take a query and/or parameters as input. A query sent as an input message will override any query 
-    defined in the node properties.
+A node that runs a query when input is received. Each instance of the node can define its own query string, 
+as well as take a query and/or parameters as input. A query sent as an input message will override any query 
+defined in the node properties.
 
-    ## Properties
+## Properties
 
-    * (**required**) **`connection`**: <`odbc config`>
+* (**required**) **`connection`**: <`odbc config`>
 
-        The ODBC pool node that defines the connection settings and manages the connection pool used by this node.
+    The ODBC pool node that defines the connection settings and manages the connection pool used by this node.
 
-    * (optional) **`queryType`**: <`string`>
+* (optional) **`queryType`**: <`string`>
 
-        Selects the type of query to execute. Options are:
-        * `query`: A regular SQL query. Parameters can be passed using Mustache templating, a parameter array in `msg.parameters`, or directly in the query string.
-        * `statement`: A prepared statement (requires `msg.parameters`).
+    Selects the type of query to execute. Options are:
+    * `query`: A regular SQL query. Parameters can be passed using Mustache templating, a parameter array in `msg.parameters`, or directly in the query string.
+    * `statement`: A prepared statement (requires `msg.parameters`).
 
-    * (optional) **`query`**: <`string`>
+* (optional) **`query`**: <`string`>
 
-        A valid SQL query string. 
-        * For `queryType: "query"`, it can contain parameters inserted using Mustache syntax (e.g., `{{{payload}}}`). You can also use placeholders (`?`) and provide an array of values in `msg.parameters`, or embed the parameters directly in the query string.
-        * For `queryType: "statement"`, it should use placeholders (`?`) for parameters.
+    A valid SQL query string. 
+    * For `queryType: "query"`, it can contain parameters inserted using Mustache syntax (e.g., `{{{payload}}}`). You can also use placeholders (`?`) and provide an array of values in `msg.parameters`, or embed the parameters directly in the query string.
+    * For `queryType: "statement"`, it should use placeholders (`?`) for parameters.
 
-    * (**required**) **`result to`**: <`dot-notation string`>
+* (**required**) **`result to`**: <`dot-notation string`>
 
-        The JSON nested element structure that will contain the result output. The string must be a valid 
-        JSON object structure using dot-notation, minus the `msg.` (e.g., `payload.results`) and must not 
-        start or end with a period. Square bracket notation is not allowed. The node input object is carried 
-        out to the output, as long as the output object name does not conflict with it. If the targeted output 
-        JSON object was already present in the input, the result from the query will be appended to it if it 
-        was itself an object (but not an array); otherwise, the original key/value pair will be overwritten.
+    The JSON nested element structure that will contain the result output. The string must be a valid 
+    JSON object structure using dot-notation, minus the `msg.` (e.g., `payload.results`) and must not 
+    start or end with a period. Square bracket notation is not allowed. The node input object is carried 
+    out to the output, as long as the output object name does not conflict with it. If the targeted output 
+    JSON object was already present in the input, the result from the query will be appended to it if it 
+    was itself an object (but not an array); otherwise, the original key/value pair will be overwritten.
 
-        Example:
+    Example:
 
-        * `input msg: {"payload": {"result": {"othervalue": 10} } };`
-        * `result to: payload.results.values`
+    * `input msg: {"payload": {"result": {"othervalue": 10} } };`
+    * `result to: payload.results.values`
 
-        In this case, `values` will be appended to `result` without overwriting `othervalue`. 
-        If `result` had been a string, then it would have been replaced by `values`.
+    In this case, `values` will be appended to `result` without overwriting `othervalue`. 
+    If `result` had been a string, then it would have been replaced by `values`.
 
-    ## Inputs
+## Inputs
 
-    The `odbc` node accepts a message input that can contain:
+The `odbc` node accepts a message input that can contain:
 
-    * **`query`**: <`string`> A valid SQL query string. This overrides the query defined in the node properties.
-    * **`payload`**:  
-        * A JSON string containing a `query` property with the SQL string.
-        * An object with a `query` property containing the SQL string.
-    * **`parameters`**: <`array` or `object`>
-        * Required for prepared statements (`queryType: "statement"`).
-        * Can be an array of values or an object mapping parameter names to values.
-        * For regular queries (`queryType: "query"`) with placeholders (`?`), provide an array of values.
+* **`query`**: <`string`> A valid SQL query string. This overrides the query defined in the node properties.
+* **`payload`**:  
+    * A JSON string containing a `query` property with the SQL string.
+    * An object with a `query` property containing the SQL string.
+* **`parameters`**: <`array` or `object`>
+    * Required for prepared statements (`queryType: "statement"`).
+    * Can be an array of values or an object mapping parameter names to values.
+    * For regular queries (`queryType: "query"`) with placeholders (`?`), provide an array of values.
 
-    ## Outputs
+## Outputs
 
-    Returns a message containing:
+Returns a message containing:
 
-    * **`output object`**: <`array`> The `odbc` result array returned from the query.
-    * **`odbc`**: <`object`> Contains additional information returned by the `odbc` module.
-    * **`parsedQuery`**: <`object`> (Optional) The parsed SQL query if the syntax checker is enabled.
+* **`output object`**: <`array`> The `odbc` result array returned from the query.
+* **`odbc`**: <`object`> Contains additional information returned by the `odbc` module.
+* **`parsedQuery`**: <`object`> (Optional) The parsed SQL query if the syntax checker is enabled.
 </script>
