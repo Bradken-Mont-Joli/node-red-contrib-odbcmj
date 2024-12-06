@@ -73,7 +73,7 @@ module.exports = function(RED) {
 
                 // Automatically determine if it's a prepared statement based on the presence of 
                 // placeholders (?) in the query or if msg.parameters is an object/array.
-                const isPreparedStatement = msg?.parameters || this.queryString.includes('?'); 
+                const isPreparedStatement = msg?.parameters || (this?.queryString ? this.queryString.includes('?') : false); 
                 this.queryString = this.config.query;
                 if (!this.queryString.length) { 
                     this.queryString = null; 
@@ -122,7 +122,7 @@ module.exports = function(RED) {
                     } else {
                         // If parameters are provided as an object, extract parameter names from the query
                         // and create an ordered array of values for the prepared statement.
-                        if (typeof msg.parameters === 'object' && !Array.isArray(msg.parameters)) {                            
+                        if (typeof msg.parameters === 'object' && !Array.isArray(msg.parameters)) {
                             const paramNames = this.queryString.match(/\(([^)]*)\)/)[1].split(',').map(el => el.trim()); 
 
                             // Create an ordered array of values
@@ -135,7 +135,7 @@ module.exports = function(RED) {
                         throw new Error("msg.parameters must be an object or an array");
                     } else if ((this.queryString.match(/\?/g) || []).length !== msg.parameters.length) {
                         throw new Error("Incorrect number of parameters");
-                    }                    
+                    }
                 }
 
                 // --- Syntax check ---
@@ -177,11 +177,10 @@ module.exports = function(RED) {
                     if (isPreparedStatement) {
                         // --- Execute prepared statement ---
                         const stmt = await this.connection.createStatement();
-                        await this.connection.prepare(this.queryString);
-                        let values = msg.parameters; 
+                        await stmt.prepare(this.queryString);
 
                         // Bind the values to the prepared statement
-                        await stmt.bind(values);
+                        await stmt.bind(msg.parameters);
 
                         // Execute the prepared statement
                         result = await stmt.execute();
@@ -214,7 +213,6 @@ module.exports = function(RED) {
                     }
                 } catch (error) {
                     // Handle query errors (e.g., log the error, set node status)
-                    this.error(`Error executing query: ${error}`);
                     this.status({ fill: "red", shape: "ring", text: "Query error" });
                     throw error; // Re-throw to trigger the outer catch block
                 } finally {
