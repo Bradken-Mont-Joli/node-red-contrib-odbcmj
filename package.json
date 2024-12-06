@@ -1,6 +1,6 @@
 {
   "name": "@bkmj/node-red-contrib-odbcmj",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Node Red implementation of odbc.js",
   "keywords": [
     "node-red",

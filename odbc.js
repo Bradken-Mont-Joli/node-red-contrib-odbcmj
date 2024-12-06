@@ -95,7 +95,7 @@ module.exports = function(RED) {
                 // Handle cases where the query is provided in the message
                 if (msg?.query) {
                     if (this.queryString) {
-                        node.log('Warning. The query defined in the node configuration was overwritten by msg.config.');
+                        this.log('Warning. The query defined in the node configuration was overwritten by msg.config.');
                     }
                     this.queryString = msg.query;
                 } else if (msg?.payload) {
