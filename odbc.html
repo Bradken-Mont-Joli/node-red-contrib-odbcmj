@@ -99,9 +99,7 @@
     defaults: {
             name: {value:""},
             connection: {type:"odbc config", required:true},
-            queryType: { value: "query" },
             query: {value: ""},
-            parameters: {value: ""},
             outputObj: {value:"payload"}
     },
     inputs:1,
@@ -116,16 +114,6 @@
             mode: 'ace/mode/sql',
             value: this.query
         });
-        $("#node-input-queryType").on("change", function() {
-            if ($(this).val() === "statement") {
-                $("#node-input-parameters").show();
-            } else {
-                $("#node-input-parameters").hide();
-            }
-        });
-
-        // Trigger the change event initially to set the visibility
-        $("#node-input-queryType").trigger("change");
     },
     oneditsave: function() {
         this.query = this.editor.getValue();
@@ -151,22 +139,9 @@
             <input type="text" id="node-input-connection">
     </div>
 
-    <div class="form-row">
-        <label for="node-input-queryType"><i class="fa fa-code"></i> Query Type</label>
-        <select id="node-input-queryType">
-            <option value="query">Query</option>
-            <option value="statement">Prepared Statement</option>
-        </select>
-    </div>
-
     <div class="form-row node-text-editor-row">
         <label for="node-input-query" style="width: 100% !important;"><i class="fa fa-search"></i> Query</label>
         <div style="height: 250px;" class="node-text-editor" id="node-input-query-editor" ></div>
-    </div>
-
-    <div class="form-row" id="node-input-parameters">
-        <label for="node-input-parameters-editor"><i class="fa fa-list"></i> Parameters</label>
-        <input type="text" id="node-input-parameters-editor">
     </div>
 
     <div class="form-row">
@@ -238,17 +213,12 @@ defined in the node properties.
 
     The ODBC pool node that defines the connection settings and manages the connection pool used by this node.
 
-* (optional) **`queryType`**: <`string`>
-
-    Selects the type of query to execute. Options are:
-    * `query`: A regular SQL query. Parameters can be passed using Mustache templating, a parameter array in `msg.parameters`, or directly in the query string.
-    * `statement`: A prepared statement (requires `msg.parameters`).
-
 * (optional) **`query`**: <`string`>
 
     A valid SQL query string. 
-    * For `queryType: "query"`, it can contain parameters inserted using Mustache syntax (e.g., `{{{payload}}}`). You can also use placeholders (`?`) and provide an array of values in `msg.parameters`, or embed the parameters directly in the query string.
-    * For `queryType: "statement"`, it should use placeholders (`?`) for parameters.
+    * Can contain parameters inserted using Mustache syntax (e.g., `{{{payload}}}`).
+    * Can use placeholders (`?`) for parameters.
+    * Can embed parameters directly in the query string.
 
 * (**required**) **`result to`**: <`dot-notation string`>
 
@@ -276,9 +246,8 @@ The `odbc` node accepts a message input that can contain:
     * A JSON string containing a `query` property with the SQL string.
     * An object with a `query` property containing the SQL string.
 * **`parameters`**: <`array` or `object`>
-    * Required for prepared statements (`queryType: "statement"`).
-    * Can be an array of values or an object mapping parameter names to values.
-    * For regular queries (`queryType: "query"`) with placeholders (`?`), provide an array of values.
+    * Can be an array of values corresponding to the placeholders (`?`) in the query.
+    * Can be an object mapping parameter names to values. If the query contains placeholders (`?`) and `msg.parameters` is an object, the values will be automatically mapped to the placeholders based on the order of the parameters in the query.
 
 ## Outputs
 
@@ -287,4 +256,13 @@ Returns a message containing:
 * **`output object`**: <`array`> The `odbc` result array returned from the query.
 * **`odbc`**: <`object`> Contains additional information returned by the `odbc` module.
 * **`parsedQuery`**: <`object`> (Optional) The parsed SQL query if the syntax checker is enabled.
+
+## Automatic Prepared Statement Handling
+
+The node automatically determines whether to use a prepared statement or a regular query based on the following:
+
+* **Presence of Placeholders:** If the query string contains placeholders (`?`), the node will use a prepared statement.
+* **`msg.parameters` Object/Array:** If the `msg.parameters` object/array is provided, the node will use a prepared statement.
+
+This automatic handling ensures that your queries are executed in the most secure way possible, minimizing the risk of SQL injection vulnerabilities.
 </script>

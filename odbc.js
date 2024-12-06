@@ -1,14 +1,14 @@
 module.exports = function(RED) {
-    const odbcModule = require('odbc');
-    const mustache = require('mustache');
-    const objPath = require('object-path');
+    const odbcModule = require('odbc'); // Import the odbc module for database connectivity
+    const mustache = require('mustache'); // Import the mustache module for templating
+    const objPath = require('object-path'); // Import the object-path module for object manipulation
 
     // --- ODBC Configuration Node ---
     function poolConfig(config) {
-        RED.nodes.createNode(this, config);
-        this.config = config;
-        this.pool = null;
-        this.connecting = false;
+        RED.nodes.createNode(this, config); // Create a Node-RED node
+        this.config = config; // Store the node configuration
+        this.pool = null; // Initialize the connection pool
+        this.connecting = false; // Flag to indicate if the node is connecting
 
         const enableSyntaxChecker = this.config.syntaxtick; // Renamed for clarity
         const syntax = this.config.syntax;
@@ -71,8 +71,13 @@ module.exports = function(RED) {
                 this.status({ fill: "blue", shape: "dot", text: "querying..." });
                 this.config.outputObj = msg?.output || this.config?.outputObj;
 
-                const isPreparedStatement = this.config.queryType === "statement";
+                // Automatically determine if it's a prepared statement based on the presence of 
+                // placeholders (?) in the query or if msg.parameters is an object/array.
+                const isPreparedStatement = msg?.parameters || this.queryString.includes('?'); 
                 this.queryString = this.config.query;
+                if (!this.queryString.length) { 
+                    this.queryString = null; 
+                }
 
                 // --- Construct the query string ---
                 if (!isPreparedStatement && this.queryString) {
@@ -89,6 +94,9 @@ module.exports = function(RED) {
 
                 // Handle cases where the query is provided in the message
                 if (msg?.query) {
+                    if (this.queryString) {
+                        node.log('Warning. The query defined in the node configuration was overwritten by msg.config.');
+                    }
                     this.queryString = msg.query;
                 } else if (msg?.payload) {
                     if (typeof msg.payload === 'string') {
@@ -107,19 +115,27 @@ module.exports = function(RED) {
                     throw new Error("No query to execute");
                 }
 
-                // --- Parameter validation for prepared statements ---
+                // --- Parameter handling for prepared statements ---
                 if (isPreparedStatement) { 
-                    if (this.queryString.includes('?')) {
-                        if (!msg?.parameters) {
-                            throw new Error("Prepared statement requires msg.parameters");
-                        } else if (!Array.isArray(msg.parameters)) {
-                            throw new Error("msg.parameters must be an array");
-                        } else if ((this.queryString.match(/\?/g) || []).length !== msg.parameters.length) {
-                            throw new Error("Incorrect number of parameters");
-                        }
+                    if (!msg?.parameters) {
+                        throw new Error("Prepared statement requires msg.parameters");
                     } else {
-                        this.warn("Prepared statement without parameters. Consider using a regular query.");
+                        // If parameters are provided as an object, extract parameter names from the query
+                        // and create an ordered array of values for the prepared statement.
+                        if (typeof msg.parameters === 'object' && !Array.isArray(msg.parameters)) {                            
+                            const paramNames = this.queryString.match(/\(([^)]*)\)/)[1].split(',').map(el => el.trim()); 
+
+                            // Create an ordered array of values
+                            msg.parameters = paramNames.map(name => msg.parameters[name]);
+                        }
                     }
+
+                    // Validate the parameters array
+                    if (!Array.isArray(msg.parameters)) {
+                        throw new Error("msg.parameters must be an object or an array");
+                    } else if ((this.queryString.match(/\?/g) || []).length !== msg.parameters.length) {
+                        throw new Error("Incorrect number of parameters");
+                    }                    
                 }
 
                 // --- Syntax check ---
@@ -159,20 +175,17 @@ module.exports = function(RED) {
                 try {
                     let result;
                     if (isPreparedStatement) {
-                        const stmt = await this.connection.prepare(this.queryString);
+                        // --- Execute prepared statement ---
+                        const stmt = await this.connection.createStatement();
+                        await this.connection.prepare(this.queryString);
                         let values = msg.parameters; 
-            
-                        if (typeof values === 'object' && !Array.isArray(values)) {
-                            // Assuming your parameters are like this: (param1, param2, param3)
-                            const paramNames = this.queryString.match(/\(([^)]*)\)/)[1].split(',').map(el => el.trim()); 
-                        
-                            // Create an ordered array of values
-                            values = paramNames.map(name => msg.parameters[name]);
-                        }
-                        
+
+                        // Bind the values to the prepared statement
+                        await stmt.bind(values);
+
                         // Execute the prepared statement
-                        const result = await stmt.execute(values);
-                        stmt.finalize(); 
+                        result = await stmt.execute();
+                        stmt.close(); 
                     } else {
                         // --- Execute regular query ---
                         result = await this.connection.query(this.queryString, msg?.parameters);

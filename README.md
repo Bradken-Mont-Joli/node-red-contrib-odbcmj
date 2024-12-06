@@ -1,6 +1,6 @@
 # node-red-contrib-odbcmj
 
-A Node-RED implementation of odbc.js (https://www.npmjs.com/package/odbc). This node allows you to make queries to a database through an ODBC connection. Additionally, parameters can be passed to the SQL query using Mustache syntax, prepared statements, or directly in the query string.
+A Node-RED implementation of odbc.js (https://www.npmjs.com/package/odbc). This node allows you to make queries to a database through an ODBC connection. Parameters can be passed to the SQL query using Mustache syntax, prepared statements, or directly in the query string. 
 
 ---
 ## Acknowledgment
@@ -17,6 +17,7 @@ This node is an unofficial fork of node-red-contrib-odbc by Mark Irish (https://
 * Connection nodes can have individually defined names.
 * Selectable SQL syntax checker.
 * Allows parameters to be passed as an object, mapping values to named parameters in the query.
+* Automatically handles prepared statements based on the query and parameters.
 
 ## Installation
 
@@ -31,18 +32,21 @@ For the `odbc` connector requirements, please see [the documentation for that pa
 
 `node-red-contrib-odbcmj` provides two nodes:
 
-* **`odbc config`**: A configuration node for defining your connection string and managing your connection parameters.
-* **`odbc`**: A node for running queries with or without parameters passed using Mustache syntax, a parameter array, or a parameter object.
+* **`odbc config`**: A configuration node for defining your connection string and managing your connection   
+ parameters.
+* **`odbc`**: A node for running queries with or without parameters.
 
 ### `odbc config`
 
-A configuration node that manages connections in an `odbc.pool` object. [Can take any configuration property recognized by `odbc.pool()`](https://www.npmjs.com/package/odbc#constructor-odbcpoolconnectionstring). The connection pool will initialize the first time an `odbc` node receives an input message.
+A configuration node that manages connections in an `odbc.pool` object. [Can take any configuration property recognized by `odbc.pool()`](https://www.npmjs.com/package/odbc#constructor-odbcpoolconnectionstring). The connection pool will initialize the first time   
+ an `odbc` node receives an input message.
 
 #### Properties
 
 * (**required**) **`connectionString`**: <`string`>
 
-    An ODBC connection string that defines your DSN and/or connection string options. Check your ODBC driver documentation for more information about valid connection strings.
+    An ODBC connection string that defines your DSN and/or connection string options.   
+ Check your ODBC driver documentation for more information about valid connection strings.
 
     Example:
     ```
@@ -71,7 +75,8 @@ A configuration node that manages connections in an `odbc.pool` object. [Can tak
 
 * (optional) **`loginTimeout`**: <`number`>
 
-    The number of seconds for an attempt to create a connection before returning to the application. Default: 3.
+    The number of seconds for an attempt to create a connection before returning to the application.   
+ Default: 3.
 
 * (optional) **`syntaxChecker`**: <`boolean`>
 
@@ -92,21 +97,18 @@ A node that runs a query when input is received. Each instance of the node can d
 
     The ODBC pool node that defines the connection settings and manages the connection pool used by this node.
 
-* (optional) **`queryType`**: <`string`>
-
-    Selects the type of query to execute. Options are:
-    * `query`:  A regular SQL query. Parameters can be passed using Mustache templating or an array in `msg.parameters`.
-    * `statement`: A prepared statement. Requires `msg.parameters`.
-
 * (optional) **`query`**: <`string`>
 
-    A valid SQL query string. 
-    * For `queryType: "query"`, it can contain parameters inserted using Mustache syntax (e.g., `{{{payload}}}`). You can also use placeholders (`?`) and provide an array of values in `msg.parameters`.
-    * For `queryType: "statement"`, it should use placeholders (`?`) for parameters.
+    A valid SQL query string.   
+ 
+    * Can contain parameters inserted using Mustache syntax (e.g., `{{{payload}}}`).
+    * Can use placeholders (`?`) for parameters.
+    * Can embed parameters directly in the query string.
 
 * (**required**) **`result to`**: <`dot-notation string`>
 
-    The JSON nested element structure that will contain the result output. The string must be a valid JSON object structure using dot-notation, minus the `msg.` (e.g., `payload.results`) and must not start or end with a period. Square bracket notation is not allowed. The node input object is carried out to the output, as long as the output object name does not conflict with it. If the targeted output JSON object was already present in the input, the result from the query will be appended to it if it was itself an object (but not an array); otherwise, the original key/value pair will be overwritten.
+    The JSON nested element structure that will contain the result output. The string must be a valid JSON object structure using dot-notation, minus the `msg.` (e.g., `payload.results`) and must not start or end with a period. Square bracket notation is not allowed. The node input object is carried out to the output, as long as the output object name does not conflict with it. If the targeted output JSON object was already present in the input, the result from the query will be appended to it   
+ if it was itself an object (but not an array); otherwise, the original key/value pair will be overwritten.
 
     Example:
 
@@ -124,9 +126,8 @@ The `odbc` node accepts a message input that can contain:
     *  A JSON string containing a `query` property with the SQL string.
     *  An object with a `query` property containing the SQL string.
 * **`parameters`**: <`array` or `object`>
-    *  Required for prepared statements (`queryType: "statement"`).
     *  Can be an array of values or an object mapping parameter names to values.
-    *  For regular queries (`queryType: "query"`) with placeholders (`?`), provide an array of values.
+    *  If the query contains placeholders (`?`) and `msg.parameters` is an object, the values will be automatically mapped to the placeholders based on the order of the parameters in the query.
 
 #### Outputs
 
@@ -135,3 +136,12 @@ Returns a message containing:
 * **`output object`**: <`array`> The `odbc` result array returned from the query.
 * **`odbc`**: <`object`> Contains additional information returned by the `odbc` module.
 * **`parsedQuery`**: <`object`> (Optional) The parsed SQL query if the syntax checker is enabled.
+
+**Automatic Prepared Statement Handling**
+
+The node automatically determines whether to use a prepared statement or a regular query based on the following:
+
+* **Presence of Placeholders:** If the query string contains placeholders (`?`), the node will use a prepared statement.
+* **`msg.parameters` Object:** If the `msg.parameters` object is provided (either as an array or an object), the node will use a prepared statement.
+
+This automatic handling ensures that your queries are executed in the most secure way possible, minimizing the risk of SQL injection vulnerabilities.
