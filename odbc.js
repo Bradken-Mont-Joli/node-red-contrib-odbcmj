@@ -214,6 +214,7 @@ module.exports = function(RED) {
                 } catch (error) {
                     if(typeof error == 'object'){
                         // Enhance the error object with query information
+                        
                         if(this?.queryString) error.query = this.queryString; 
                         if(this?.parameters) error.params = msg.parameters;
                         if(error?.message){
@@ -221,7 +222,16 @@ module.exports = function(RED) {
                         }
                     }
                     else if (typeof error == 'string'){
-                        error += error?.query ? `\nquery: ${error.query}`: '' + error?.params ? `\nparams: ${error.params}` : ''
+                        const str = (() =>{
+                            let str = ''
+                            if(this?.queryString || this?.parameters){
+                                str += " {"
+                                if(this?.queryString) str += `"query":'${error.query}'`; 
+                                if(this?.parameters) str += `, "query":'${error.params}'`;
+                                str += "}"
+                            }                            
+                        })()
+                        error += str;
                     }
                     // Handle query errors
                     this.status({ fill: "red", shape: "ring", text: "Query error" });
