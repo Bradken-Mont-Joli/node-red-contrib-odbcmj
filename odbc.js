@@ -212,10 +212,14 @@ module.exports = function(RED) {
                         throw new Error("The query returned no results");
                     }
                 } catch (error) {
-                    // Enhance the error object with query information
-                    if(this?.queryString) error.query = this.queryString; 
-                    if(this?.parameters) error.params = msg.parameters; 
-
+                    if(typeof error == 'object'){
+                        // Enhance the error object with query information
+                        if(this?.queryString) error.query = this.queryString; 
+                        if(this?.parameters) error.params = msg.parameters; 
+                    }
+                    else if (typeof error == 'string'){
+                        error += error?.query ? `\nquery: ${error.query}`: '' + error?.params ? `\nparams: ${error.params}` : ''
+                    }
                     // Handle query errors
                     this.status({ fill: "red", shape: "ring", text: "Query error" });
                     throw error; // Re-throw to trigger the outer catch block
