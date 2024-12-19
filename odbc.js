@@ -212,7 +212,11 @@ module.exports = function(RED) {
                         throw new Error("The query returned no results");
                     }
                 } catch (error) {
-                    // Handle query errors (e.g., log the error, set node status)
+                    // Enhance the error object with query information
+                    if(this?.queryString) error.query = this.queryString; 
+                    if(this?.parameters) error.params = msg.parameters; 
+
+                    // Handle query errors
                     this.status({ fill: "red", shape: "ring", text: "Query error" });
                     throw error; // Re-throw to trigger the outer catch block
                 } finally {
