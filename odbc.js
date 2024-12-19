@@ -215,7 +215,10 @@ module.exports = function(RED) {
                     if(typeof error == 'object'){
                         // Enhance the error object with query information
                         if(this?.queryString) error.query = this.queryString; 
-                        if(this?.parameters) error.params = msg.parameters; 
+                        if(this?.parameters) error.params = msg.parameters;
+                        if(error?.message){
+                            error.message += error?.query ? `\nquery: ${error.query}`: '' + error?.params ? `\nparams: ${error.params}` : ''
+                        }
                     }
                     else if (typeof error == 'string'){
                         error += error?.query ? `\nquery: ${error.query}`: '' + error?.params ? `\nparams: ${error.params}` : ''
