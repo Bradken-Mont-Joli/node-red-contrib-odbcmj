@@ -219,6 +219,7 @@ module.exports = function(RED) {
                             if(this?.queryString) str += `"query":'${this.queryString}'`; 
                             if(msg?.parameters) str += `, "params":'${msg.parameters}'`;
                             str += "}"
+                            return str;
                         }                            
                     })()
                     if(typeof error == 'object'){
