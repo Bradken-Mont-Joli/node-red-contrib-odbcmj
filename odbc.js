@@ -212,25 +212,26 @@ module.exports = function(RED) {
                         throw new Error("The query returned no results");
                     }
                 } catch (error) {
+                    const str = (() =>{
+                        let str = ''
+                        if(this?.queryString || this?.parameters){
+                            str += " {"
+                            if(this?.queryString) str += `"query":'${this.queryString}'`; 
+                            if(msg?.parameters) str += `, "params":'${msg.parameters}'`;
+                            str += "}"
+                        }                            
+                    })()
                     if(typeof error == 'object'){
                         // Enhance the error object with query information
                         
                         if(this?.queryString) error.query = this.queryString; 
                         if(this?.parameters) error.params = msg.parameters;
+
                         if(error?.message){
-                            error.message += error?.query ? `\nquery: ${error.query}`: '' + error?.params ? `\nparams: ${error.params}` : ''
+                            error.message += str;
                         }
                     }
                     else if (typeof error == 'string'){
-                        const str = (() =>{
-                            let str = ''
-                            if(this?.queryString || this?.parameters){
-                                str += " {"
-                                if(this?.queryString) str += `"query":'${error.query}'`; 
-                                if(this?.parameters) str += `, "query":'${error.params}'`;
-                                str += "}"
-                            }                            
-                        })()
                         error += str;
                     }
                     // Handle query errors
