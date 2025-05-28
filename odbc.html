@@ -1,268 +1,348 @@
 <script type="text/javascript">
-    RED.nodes.registerType('odbc config',{
-        category: 'config',
+    RED.nodes.registerType("odbc config", {
+        category: "config",
         defaults: {
-            connectionString: {value:"", required:true},
-            name: {value:""},
-            initialSize: {value:5},
-            incrementSize: {value:5},
-            maxSize: {value:15},
-            shrink:{value:true},
-            syntaxtick:{value:false},
-            syntax: {value:"mysql"},
-            connectionTimeout:{value:3},
-            loginTimeout:{value:3}
+            connectionString: { value: "", required: true },
+            name: { value: "" },
+            initialSize: { value: 5 },
+            incrementSize: { value: 5 },
+            maxSize: { value: 15 },
+            shrink: { value: true },
+            syntaxtick: { value: false },
+            syntax: { value: "mysql" },
+            connectionTimeout: { value: 3 },
+            loginTimeout: { value: 3 },
+            // NOUVELLE PROPRIÉTÉ AJOUTÉE ICI
+            retryFreshConnection: { value: false }, // Default à false
         },
-        label: function() {
-            return this.name || 'odbc config';
+        label: function () {
+            return this.name || "odbc config";
         },
-        oneditprepare: function() {
+        oneditprepare: function () {
             $(".input-syntax").hide();
-            $("#node-config-input-syntaxtick").change(function() {
-                if (this.checked){
+            $("#node-config-input-syntaxtick").change(function () {
+                if (this.checked) {
                     $(".input-syntax").show();
                 } else {
                     $(".input-syntax").hide();
                 }
             });
-        }
+        },
     });
 </script>
 
 <script type="text/html" data-template-name="odbc config">
-
     <div class="form-row">
-        <label for="node-config-input-name"><i class="fa fa-tag"></i> Name</label>
-        <input type="text" id="node-config-input-name">
+        <label for="node-config-input-name"
+            ><i class="fa fa-tag"></i>  Name</label
+        >
+        <input type="text" id="node-config-input-name" />
     </div>
 
     <div class="form-row">
-        <label for="node-config-input-connectionString"><i class="icon-bookmark"></i>Connection String</label>
-        <input type="text" id="node-config-input-connectionString" placeholder="DSN=...;">
+        <label for="node-config-input-connectionString"
+            ><i class="fa fa-database"></i>  Connection String</label
+        >
+        <input
+            type="text"
+            id="node-config-input-connectionString"
+            placeholder="DSN=...;"
+        />
     </div>
 
     <div class="form-row">
-        <label for="node-config-input-initialSize"><i class="icon-bookmark"></i>Initial Size</label>
-        <input type="number" id="node-config-input-initialSize" placeholder="5">
+        <label for="node-config-input-initialSize"
+            ><i class="fa fa-play"></i>  Initial Size</label
+        >
+        <input
+            type="number"
+            id="node-config-input-initialSize"
+            placeholder="5"
+        />
     </div>
 
     <div class="form-row">
-        <label for="node-config-input-incrementSize"><i class="icon-bookmark"></i>Increment Size</label>
-        <input type="number" id="node-config-input-incrementSize" placeholder="5">
+        <label for="node-config-input-incrementSize"
+            ><i class="fa fa-plus"></i>  Increment Size</label
+        >
+        <input
+            type="number"
+            id="node-config-input-incrementSize"
+            placeholder="5"
+        />
     </div>
 
     <div class="form-row">
-        <label for="node-config-input-maxSize"><i class="icon-bookmark"></i>Max Size</label>
-        <input type="number" id="node-config-input-maxSize" placeholder="15">
+        <label for="node-config-input-maxSize"
+            ><i class="fa fa-stop"></i>  Max Size</label
+        >
+        <input type="number" id="node-config-input-maxSize" placeholder="15" />
     </div>
 
     <div class="form-row">
-        <label for="node-config-input-shrink"><i class="icon-bookmark"></i>Shrink Pool</label>
-        <input type="checkbox" id="node-config-input-shrink" style="margin-left:0px; vertical-align:top; width:auto !important;">
+        <label for="node-config-input-shrink"
+            ><i class="fa fa-compress"></i>  Shrink Pool</label
+        >
+        <input
+            type="checkbox"
+            id="node-config-input-shrink"
+            style="margin-left:0px; vertical-align:top; width:auto !important;"
+        />
     </div>
 
     <div class="form-row">
-        <label for="node-config-input-connectionTimeout"><i class="icon-bookmark"></i>Connection Timeout (sec)</label>
-        <input type="number" id="node-config-input-connectionTimeout" placeholder="3">
+        <label for="node-config-input-connectionTimeout"
+            ><i class="fa fa-clock-o"></i></i>  Connection Timeout (sec)</label
+        >
+        <input
+            type="number"
+            id="node-config-input-connectionTimeout"
+            placeholder="3"
+        />
     </div>
 
     <div class="form-row">
-        <label for="node-config-input-loginTimeout"><i class="icon-bookmark"></i>Login Timeout (sec)</label>
-        <input type="number" id="node-config-input-loginTimeout" placeholder="3">
+        <label for="node-config-input-loginTimeout"
+            ><i class="fa fa-clock-o"></i>  Login Timeout (sec)</label
+        >
+        <input
+            type="number"
+            id="node-config-input-loginTimeout"
+            placeholder="3"
+        />
     </div>
 
     <div class="form-row">
-        <label for="node-config-input-syntaxtick" style="width: auto;"><i class="icon-bookmark"></i>Syntax Checker</label>
-        <input type="checkbox" id="node-config-input-syntaxtick" style="display: inline-block; width: auto; vertical-align: top;">
+        <label for="node-config-input-retryFreshConnection" style="width: auto;"
+            ><i class="fa fa-refresh"></i>  Retry with fresh connection on
+            error</label
+        >
+        <input
+            type="checkbox"
+            id="node-config-input-retryFreshConnection"
+            style="display: inline-block; width: auto; vertical-align: top;"
+        />
+    </div>
+
+    <div class="form-row">
+        <label for="node-config-input-syntaxtick" style="width: auto;"
+            ><i class="fa fa-underline"></i>  Syntax Checker</label
+        >
+        <input
+            type="checkbox"
+            id="node-config-input-syntaxtick"
+            style="display: inline-block; width: auto; vertical-align: top;"
+        />
     </div>
 
     <div class="form-row input-syntax">
-        <label for=""><i class="icon-bookmark"></i> Syntax</label>
+        <label for="node-config-input-syntax"
+            ><i class="fa fa-language"></i>  Syntax</label
+        >
         <select id="node-config-input-syntax" style="width: 70%">
-                <option value="bigquery">BigQuery</option>
-                <option value="db2">DB2</option>
-                <option value="hive">Hive</option>
-                <option value="mariadb">MariaDB</option>
-                <option value="mysql">Mysql</option>
-                <option value="postgresql">PostgresQL</option>
-                <option value="sqlite">Sqlite</option>
-                <option value="transactsql">TransactSQL</option>
-                <option value="flinksql">FlinkSQL</option>
+            <option value="bigquery">BigQuery</option>
+            <option value="db2">DB2</option>
+            <option value="hive">Hive</option>
+            <option value="mariadb">MariaDB</option>
+            <option value="mysql">Mysql</option>
+            <option value="postgresql">PostgresQL</option>
+            <option value="sqlite">Sqlite</option>
+            <option value="transactsql">TransactSQL</option>
+            <option value="flinksql">FlinkSQL</option>
         </select>
     </div>
 </script>
 
 <script type="text/javascript">
-    RED.nodes.registerType('odbc',{
-    category: 'storage',
-    color: '#89A5C0',
-    defaults: {
-            name: {value:""},
-            connection: {type:"odbc config", required:true},
-            query: {value: ""},
-            outputObj: {value:"payload"}
-    },
-    inputs:1,
-    outputs:1,
-    icon: "db.svg",
-    label: function() {
-            return this.name||"odbc";
-    },
-    oneditprepare: function() {
-        this.editor = RED.editor.createEditor({
-            id: 'node-input-query-editor',
-            mode: 'ace/mode/sql',
-            value: this.query
-        });
-    },
-    oneditsave: function() {
-        this.query = this.editor.getValue();
-        this.editor.destroy();
-        delete this.editor;
-    },
-    oneditcancel: function() {
-        this.editor.destroy();
-        delete this.editor;
-    }
-});
+    RED.nodes.registerType("odbc", {
+        category: "storage",
+        color: "#89A5C0",
+        defaults: {
+            name: { value: "" },
+            connection: { type: "odbc config", required: true },
+            query: { value: "" },
+            outputObj: { value: "payload" },
+        },
+        inputs: 1,
+        outputs: 1,
+        icon: "db.svg",
+        label: function () {
+            return this.name || "odbc";
+        },
+        oneditprepare: function () {
+            this.editor = RED.editor.createEditor({
+                id: "node-input-query-editor",
+                mode: "ace/mode/sql",
+                value: this.query,
+            });
+        },
+        oneditsave: function () {
+            this.query = this.editor.getValue();
+            this.editor.destroy();
+            delete this.editor;
+        },
+        oneditcancel: function () {
+            this.editor.destroy();
+            delete this.editor;
+        },
+    });
 </script>
 
 <script type="text/html" data-template-name="odbc">
-
     <div class="form-row">
         <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
-        <input type="text" id="node-input-name">
+        <input type="text" id="node-input-name" />
     </div>
 
     <div class="form-row">
-            <label for="node-input-connection"><i class="fa fa-cog"></i> Connection</label>
-            <input type="text" id="node-input-connection">
+        <label for="node-input-connection"
+            ><i class="fa fa-cog"></i> Connection</label
+        >
+        <input type="text" id="node-input-connection" />
     </div>
 
     <div class="form-row node-text-editor-row">
-        <label for="node-input-query" style="width: 100% !important;"><i class="fa fa-search"></i> Query</label>
-        <div style="height: 250px;" class="node-text-editor" id="node-input-query-editor" ></div>
+        <label for="node-input-query" style="width: 100% !important;"
+            ><i class="fa fa-search"></i> Query</label
+        >
+        <div
+            style="height: 250px;"
+            class="node-text-editor"
+            id="node-input-query-editor"
+        ></div>
     </div>
 
     <div class="form-row">
-            <label for="node-input-outputObj"><i class="fa fa-edit"></i> Result to</label>
-            <span>msg.</span><input type="text" id="node-input-outputObj" placeholder="payload" style="width: 64%;">
+        <label for="node-input-outputObj"
+            ><i class="fa fa-edit"></i> Result to</label
+        >
+        <span>msg.</span
+        ><input
+            type="text"
+            id="node-input-outputObj"
+            placeholder="payload"
+            style="width: 64%;"
+        />
     </div>
 </script>
 <script type="text/markdown" data-help-name="odbc config">
-A configuration node that manages connections in an `odbc.pool` object. 
-[Can take any configuration property recognized by `odbc.pool()`](https://www.npmjs.com/package/odbc/v/2.4.8#constructor-odbcconnectconnectionstring). 
-The connection pool will initialize the first time an `odbc` node receives an input message.
+    A configuration node that manages connections in an `odbc.pool` object.
+    [Can take any configuration property recognized by `odbc.pool()`](https://www.npmjs.com/package/odbc/v/2.4.8#constructor-odbcconnectconnectionstring).
+    The connection pool will initialize the first time an `odbc` node receives an input message.
 
-## Properties
+    ## Properties
 
-* (**required**) **`connectionString`**: <`string`>
+    -   (**required**) **`connectionString`**: <`string`>
 
-    An ODBC connection string that defines your DSN and/or connection string options. 
-    Check your ODBC driver documentation for more information about valid connection strings.
+        An ODBC connection string that defines your DSN and/or connection string options.
+        Check your ODBC driver documentation for more information about valid connection strings.
 
-    Example:
-    ```
-    DSN=MyDSN;DFT=2;
-    ```
+        Example:
 
-* (optional) **`initialSize`**: <`number`>
+        ```
+        DSN=MyDSN;DFT=2;
+        ```
 
-    The number of connections created in the pool when it is initialized. Default: 5.
+    -   (optional) **`initialSize`**: <`number`>
 
-* (optional) **`incrementSize`**: <`number`>
+        The number of connections created in the pool when it is initialized. Default: 5.
 
-    The number of connections that are created when the pool is exhausted. Default: 5.
+    -   (optional) **`incrementSize`**: <`number`>
 
-* (optional) **`maxSize`**: <`number`>
+        The number of connections that are created when the pool is exhausted. Default: 5.
 
-    The maximum number of connections allowed in the pool before it won't create any more. Default: 15.
+    -   (optional) **`maxSize`**: <`number`>
 
-* (optional) **`shrinkPool`**: <`boolean`>
+        The maximum number of connections allowed in the pool before it won't create any more. Default: 15.
 
-    Whether the number of connections should be reduced to `initialSize` when they are returned to the pool. Default: true.
+    -   (optional) **`shrinkPool`**: <`boolean`>
 
-* (optional) **`connectionTimeout`**: <`number`>
+        Whether the number of connections should be reduced to `initialSize` when they are returned to the pool. Default: true.
 
-    The number of seconds for a connection to remain idle before closing. Default: 3.
+    -   (optional) **`connectionTimeout`**: <`number`>
 
-* (optional) **`loginTimeout`**: <`number`>
+        The number of seconds for a connection to remain idle before closing. Default: 3.
 
-    The number of seconds for an attempt to create a connection before returning to the application. Default: 3.
+    -   (optional) **`loginTimeout`**: <`number`>
 
-* (optional) **`syntaxChecker`**: <`boolean`>
+        The number of seconds for an attempt to create a connection before returning to the application. Default: 3.
 
-    Whether the syntax validator is activated or not. If activated, the query string will be 
-    [parsed](https://www.npmjs.com/package/node-sql-parser#create-ast-for-sql-statement) 
-    and appended as an object to the output message with a key named `parsedQuery`. Default: false.
+    -   (optional) **`retryFreshConnection`**: <`boolean`> If checked, in case of a query error, the node will attempt the query a second time using a brand new database connection instead of one from the pool. If this second attempt is successful, it indicates the pooled connection was faulty, and the entire connection pool will be reset. Default: false.
 
-* (optional) **`syntax`**: <`string`>
+    -   (optional) **`syntaxChecker`**: <`boolean`>
 
-    Dropdown list of the available [SQL flavors available](https://www.npmjs.com/package/node-sql-parser#supported-database-sql-syntax). 
-    Default: mysql.
+        Whether the syntax validator is activated or not. If activated, the query string will be
+        [parsed](https://www.npmjs.com/package/node-sql-parser#create-ast-for-sql-statement)
+        and appended as an object to the output message with a key named `parsedQuery`. Default: false.
+
+    -   (optional) **`syntax`**: <`string`>
+
+        Dropdown list of the available [SQL flavors available](https://www.npmjs.com/package/node-sql-parser#supported-database-sql-syntax).
+        Default: mysql.
 </script>
 
 <script type="text/markdown" data-help-name="odbc">
-A node that runs a query when input is received. Each instance of the node can define its own query string, 
-as well as take a query and/or parameters as input. A query sent as an input message will override any query 
+A node that runs a query when input is received. Each instance of the node can define its own query string,
+as well as take a query and/or parameters as input. A query sent as an input message will override any query
 defined in the node properties.
 
 ## Properties
 
-* (**required**) **`connection`**: <`odbc config`>
+-   (**required**) **`connection`**: <`odbc config`>
 
     The ODBC pool node that defines the connection settings and manages the connection pool used by this node.
 
-* (optional) **`query`**: <`string`>
+-   (optional) **`query`**: <`string`>
 
-    A valid SQL query string. 
-    * Can contain parameters inserted using Mustache syntax (e.g., `{{{payload}}}`).
-    * Can use placeholders (`?`) for parameters.
-    * Can embed parameters directly in the query string.
+    A valid SQL query string.
 
-* (**required**) **`result to`**: <`dot-notation string`>
+    -   Can contain parameters inserted using Mustache syntax (e.g., `{{{payload}}}`).
+    -   Can use placeholders (`?`) for parameters.
+    -   Can embed parameters directly in the query string.
 
-    The JSON nested element structure that will contain the result output. The string must be a valid 
-    JSON object structure using dot-notation, minus the `msg.` (e.g., `payload.results`) and must not 
-    start or end with a period. Square bracket notation is not allowed. The node input object is carried 
-    out to the output, as long as the output object name does not conflict with it. If the targeted output 
-    JSON object was already present in the input, the result from the query will be appended to it if it 
+-   (**required**) **`result to`**: <`dot-notation string`>
+
+    The JSON nested element structure that will contain the result output. The string must be a valid
+    JSON object structure using dot-notation, minus the `msg.` (e.g., `payload.results`) and must not
+    start or end with a period. Square bracket notation is not allowed. The node input object is carried
+    out to the output, as long as the output object name does not conflict with it. If the targeted output
+    JSON object was already present in the input, the result from the query will be appended to it if it
     was itself an object (but not an array); otherwise, the original key/value pair will be overwritten.
 
     Example:
 
-    * `input msg: {"payload": {"result": {"othervalue": 10} } };`
-    * `result to: payload.results.values`
+    -   `input msg: {"payload": {"result": {"othervalue": 10} } };`
+    -   `result to: payload.results.values`
 
-    In this case, `values` will be appended to `result` without overwriting `othervalue`. 
+    In this case, `values` will be appended to `result` without overwriting `othervalue`.
     If `result` had been a string, then it would have been replaced by `values`.
 
 ## Inputs
 
 The `odbc` node accepts a message input that can contain:
 
-* **`query`**: <`string`> A valid SQL query string. This overrides the query defined in the node properties.
-* **`payload`**:  
-    * A JSON string containing a `query` property with the SQL string.
-    * An object with a `query` property containing the SQL string.
-* **`parameters`**: <`array` or `object`>
-    * Can be an array of values corresponding to the placeholders (`?`) in the query.
-    * Can be an object mapping parameter names to values. If the query contains placeholders (`?`) and `msg.parameters` is an object, the values will be automatically mapped to the placeholders based on the order of the parameters in the query.
+-   **`query`**: <`string`> A valid SQL query string. This overrides the query defined in the node properties.
+-   **`payload`**:
+    -   A JSON string containing a `query` property with the SQL string.
+    -   An object with a `query` property containing the SQL string.
+-   **`parameters`**: <`array` or `object`>
+    -   Can be an array of values corresponding to the placeholders (`?`) in the query.
+    -   Can be an object mapping parameter names to values. If the query contains placeholders (`?`) and `msg.parameters` is an object, the values will be automatically mapped to the placeholders based on the order of the parameters in the query.
 
 ## Outputs
 
 Returns a message containing:
 
-* **`output object`**: <`array`> The `odbc` result array returned from the query.
-* **`odbc`**: <`object`> Contains additional information returned by the `odbc` module.
-* **`parsedQuery`**: <`object`> (Optional) The parsed SQL query if the syntax checker is enabled.
+-   **`output object`**: <`array`> The `odbc` result array returned from the query.
+-   **`odbc`**: <`object`> Contains additional information returned by the `odbc` module.
+-   **`parsedQuery`**: <`object`> (Optional) The parsed SQL query if the syntax checker is enabled.
 
 ## Automatic Prepared Statement Handling
 
 The node automatically determines whether to use a prepared statement or a regular query based on the following:
 
-* **Presence of Placeholders:** If the query string contains placeholders (`?`), the node will use a prepared statement.
-* **`msg.parameters` Object/Array:** If the `msg.parameters` object/array is provided, the node will use a prepared statement.
+-   **Presence of Placeholders:** If the query string contains placeholders (`?`), the node will use a prepared statement.
+-   **`msg.parameters` Object/Array:** If the `msg.parameters` object/array is provided, the node will use a prepared statement.
 
 This automatic handling ensures that your queries are executed in the most secure way possible, minimizing the risk of SQL injection vulnerabilities.
 </script>
