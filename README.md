@@ -105,4 +105,4 @@ When streaming is active, each output message will contain:
 -   A `msg.odbc_stream` object with metadata for tracking progress:
     -   `index`: The starting index of the current chunk (e.g., 0, 100, 200...).
     -   `count`: The number of rows in the current chunk.
-    -   `complete`: A boolean that is `true` only on the very last message of the stream (or if the result set was empty), and `false` otherwise. This is useful for triggering a downstream action once all rows have been processed.
+    -   `complete`: A boolean that is `true` only on the very last message, and `false` otherwise. The last payload will always be an empty array.  This is useful for triggering a downstream action once all rows have been processed.

@@ -123,15 +123,14 @@ module.exports = function (RED) {
     });
 
 
-// --- ODBC Query Node ---
+    // --- ODBC Query Node ---
     function odbc(config) {
         RED.nodes.createNode(this, config);
         this.config = config;
         this.poolNode = RED.nodes.getNode(this.config.connection);
         this.name = this.config.name;
-        // La logique de retry complexe est temporairement retirée pour stabiliser le noeud.
 
-        // Cette fonction reste inchangée
+        // ... (enhanceError et executeQueryAndProcess restent inchangés)
         this.enhanceError = (error, query, params, defaultMessage = "Query error") => {
             const queryContext = (() => {
                 let s = "";
@@ -153,11 +152,9 @@ module.exports = function (RED) {
             if (params) finalError.params = params;
             return finalError;
         };
-        
-        // Cette fonction reste presque inchangée, elle est maintenant appelée depuis on("input")
+
         this.executeQueryAndProcess = async (dbConnection, queryString, queryParams, msg) => {
             const result = await dbConnection.query(queryString, queryParams);
-
             if (typeof result === "undefined") { throw new Error("Query returned undefined."); }
             const newMsg = RED.util.cloneMessage(msg);
             const otherParams = {};
@@ -199,144 +196,128 @@ module.exports = function (RED) {
             return newMsg;
         };
 
-        // =================================================================
-        // NOUVELLE IMPLEMENTATION DU STREAMING
-        // =================================================================
         this.executeStreamQuery = async (dbConnection, queryString, queryParams, msg, send) => {
-        const chunkSize = parseInt(this.config.streamChunkSize) || 1;
-        // La taille du fetch peut être optimisée, mais restons simple pour la clarté.
-        const fetchSize = chunkSize > 50 ? 50 : chunkSize;
-        let cursor;
-
-        try {
-            cursor = await dbConnection.query(queryString, queryParams, { cursor: true, fetchSize: fetchSize });
-            this.status({ fill: "blue", shape: "dot", text: "streaming rows..." });
-
-            let rowCount = 0;
-            let chunk = [];
-
-            // Boucle infinie qui sera rompue de l'intérieur
-            while (true) {
-                const rows = await cursor.fetch();
-
-                // 1. VÉRIFIER D'ABORD LA FIN DU FLUX
-                if (!rows || rows.length === 0) {
-                    // Le flux de la base de données est terminé.
-                    // Le contenu actuel de `chunk` est le tout dernier lot.
-                    if (chunk.length > 0) {
-                        const newMsg = RED.util.cloneMessage(msg);
-                        objPath.set(newMsg, this.config.outputObj, chunk);
-                        // C'est le message final, donc `complete` est TRUE.
-                        newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: true };
-                        send(newMsg);
-                    } else if (rowCount === 0) {
-                        // Gérer le cas où la requête ne retourne aucune ligne.
-                        const newMsg = RED.util.cloneMessage(msg);
-                        objPath.set(newMsg, this.config.outputObj, []);
-                        newMsg.odbc_stream = { index: 0, count: 0, complete: true };
-                        send(newMsg);
+            const chunkSize = parseInt(this.config.streamChunkSize) || 1;
+            const fetchSize = chunkSize > 100 ? 100 : chunkSize; // Optimisation du fetch
+            let cursor;
+        
+            try {
+                cursor = await dbConnection.query(queryString, queryParams, { cursor: true, fetchSize: fetchSize });
+                this.status({ fill: "blue", shape: "dot", text: "streaming rows..." });
+        
+                let rowCount = 0;
+                let chunk = [];
+        
+                while (true) {
+                    const rows = await cursor.fetch();
+                    if (!rows || rows.length === 0) {
+                        break;
                     }
-                    // Quitter la boucle car il n'y a plus rien à faire.
-                    break;
-                }
-
-                // 2. S'IL Y A DES LIGNES, LES TRAITER
-                for (const row of rows) {
-                    rowCount++;
-                    chunk.push(row);
-                    if (chunk.length >= chunkSize) {
-                        const newMsg = RED.util.cloneMessage(msg);
-                        objPath.set(newMsg, this.config.outputObj, chunk);
-                        // Ce lot n'est pas le dernier, donc `complete` est FALSE.
-                        newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: false };
-                        send(newMsg);
-                        // Vider le lot pour le prochain remplissage.
-                        chunk = [];
+        
+                    for (const row of rows) {
+                        rowCount++;
+                        chunk.push(row);
+                        if (chunk.length >= chunkSize) {
+                            const newMsg = RED.util.cloneMessage(msg);
+                            objPath.set(newMsg, this.config.outputObj, chunk);
+                            newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: false };
+                            send(newMsg);
+                            chunk = [];
+                        }
                     }
                 }
-            } // Fin de la boucle while
-
-            this.status({ fill: "green", shape: "dot", text: `success (${rowCount} rows)` });
-
-        } finally {
-            if (cursor) {
-                await cursor.close();
+        
+                if (chunk.length > 0) {
+                    const newMsg = RED.util.cloneMessage(msg);
+                    objPath.set(newMsg, this.config.outputObj, chunk);
+                    newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: false };
+                    send(newMsg);
+                }
+        
+                const finalMsg = RED.util.cloneMessage(msg);
+                objPath.set(finalMsg, this.config.outputObj, []);
+                finalMsg.odbc_stream = { index: rowCount, count: 0, complete: true };
+                send(finalMsg);
+        
+                this.status({ fill: "green", shape: "dot", text: `success (${rowCount} rows)` });
+        
+            } finally {
+                if (cursor) {
+                    await cursor.close();
+                }
             }
-        }
-    };
+        };
 
-        // =================================================================
-        // NOUVELLE LOGIQUE D'ENTREE UNIFIEE
-        // =================================================================
         this.on("input", async (msg, send, done) => {
             if (!this.poolNode) {
-                const err = new Error("ODBC Config node not properly configured.");
-                this.status({ fill: "red", shape: "ring", text: "No config node" });
-                done(err);
-                return;
+                return done(new Error("ODBC Config node not properly configured."));
             }
 
-            let connection;
-            try {
-                this.status({ fill: "blue", shape: "dot", text: "preparing..." });
+            const execute = async (connection) => {
                 this.config.outputObj = this.config.outputObj || "payload";
-
-                // Obtenir la requête et les paramètres
+                
                 const querySourceType = this.config.querySourceType || 'msg';
                 const querySource = this.config.querySource || 'query';
                 const paramsSourceType = this.config.paramsSourceType || 'msg';
                 const paramsSource = this.config.paramsSource || 'parameters';
-
-                const currentQueryParams = await new Promise((resolve) => {
-                    RED.util.evaluateNodeProperty(paramsSource, paramsSourceType, this, msg, (err, value) => resolve(err ? undefined : value));
-                });
-
-                let currentQueryString = await new Promise((resolve) => {
-                     RED.util.evaluateNodeProperty(querySource, querySourceType, this, msg, (err, value) => resolve(err ? undefined : (value || this.config.query || "")));
-                });
                 
-                if (!currentQueryString) { throw new Error("No query to execute"); }
+                const params = await new Promise(resolve => RED.util.evaluateNodeProperty(paramsSource, paramsSourceType, this, msg, (err, val) => resolve(err ? undefined : val)));
+                let query = await new Promise(resolve => RED.util.evaluateNodeProperty(querySource, querySourceType, this, msg, (err, val) => resolve(err ? undefined : (val || this.config.query || ""))));
                 
-                const isPreparedStatement = currentQueryParams || (currentQueryString && currentQueryString.includes("?"));
-                if (!isPreparedStatement && currentQueryString) {
-                    currentQueryString = mustache.render(currentQueryString, msg);
+                if (!query) throw new Error("No query to execute");
+
+                const isPreparedStatement = params || (query && query.includes("?"));
+                if (!isPreparedStatement && query) {
+                    query = mustache.render(query, msg);
                 }
                 
-                // Obtenir une connexion du pool
-                this.status({ fill: "yellow", shape: "dot", text: "connecting..." });
-                connection = await this.poolNode.connect();
                 this.status({ fill: "blue", shape: "dot", text: "executing..." });
-
                 if (this.config.streaming) {
-                    await this.executeStreamQuery(connection, currentQueryString, currentQueryParams, msg, send);
+                    await this.executeStreamQuery(connection, query, params, msg, send);
                 } else {
-                    const newMsg = await this.executeQueryAndProcess(connection, currentQueryString, currentQueryParams, msg);
+                    const newMsg = await this.executeQueryAndProcess(connection, query, params, msg);
                     this.status({ fill: "green", shape: "dot", text: "success" });
                     send(newMsg);
                 }
-                
-                // Si tout s'est bien passé, on appelle done() sans erreur
-                done();
+            };
 
-            } catch (err) {
-                const finalError = this.enhanceError(err, null, null, "Query Execution Failed");
-                this.status({ fill: "red", shape: "ring", text: "query error" });
-                done(finalError); // On passe l'erreur à done() pour que Node-RED la gère
-
-            } finally {
-                if (connection) {
+            let connectionFromPool;
+            try {
+                this.status({ fill: "yellow", shape: "dot", text: "connecting..." });
+                connectionFromPool = await this.poolNode.connect();
+                await execute(connectionFromPool);
+                return done();
+            } catch (poolError) {
+                this.warn(`First attempt with pooled connection failed: ${poolError.message}`);
+                if (this.poolNode.config.retryFreshConnection) {
+                    this.warn("Attempting retry with a fresh connection.");
+                    this.status({ fill: "yellow", shape: "dot", text: "Retrying (fresh)..." });
+                    let freshConnection;
                     try {
-                        await connection.close();
-                    } catch (closeErr) {
-                        this.warn(`Failed to close DB connection: ${closeErr.message}`);
+                        const freshConnectConfig = this.poolNode.getFreshConnectionConfig();
+                        freshConnection = await odbcModule.connect(freshConnectConfig);
+                        this.log("Fresh connection established for retry.");
+                        await execute(freshConnection);
+                        this.log("Query successful with fresh connection. Resetting pool.");
+                        await this.poolNode.resetPool();
+                        return done();
+                    } catch (freshError) {
+                        this.status({ fill: "red", shape: "ring", text: "retry failed" });
+                        return done(this.enhanceError(freshError, null, null, "Retry with fresh connection also failed"));
+                    } finally {
+                        if (freshConnection) await freshConnection.close();
                     }
+                } else {
+                    this.status({ fill: "red", shape: "ring", text: "query error" });
+                    return done(this.enhanceError(poolError));
                 }
+            } finally {
+                if (connectionFromPool) await connectionFromPool.close();
             }
         });
         
         this.on("close", (done) => {
             this.status({});
-            // La logique de fermeture du pool est déjà dans le noeud de config
             done();
         });
 
