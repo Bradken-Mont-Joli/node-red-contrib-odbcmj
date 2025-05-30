@@ -1,18 +1,35 @@
 {
   "name": "@bkmj/node-red-contrib-odbcmj",
-  "version": "1.7.0",
-  "description": "Node Red implementation of odbc.js",
+  "version": "2.0.0",
+  "description": "A powerful Node-RED node to connect to any ODBC data source, with connection pooling, advanced retry logic, and result streaming.",
   "keywords": [
     "node-red",
     "odbc",
-    "SQL",
-    "query"
+    "sql",
+    "query",
+    "database",
+    "streaming",
+    "sql server",
+    "postgresql",
+    "mysql",
+    "db2",
+    "ibm i"
   ],
+  "engines": {
+    "node": ">=18.0.0",
+    "node-red": ">=3.0.0"
+  },
   "dependencies": {
     "mustache": "^4.2.0",
     "node-sql-parser": "^5.3.5",
     "object-path": "^0.11.8",
     "odbc": "^2.4.9"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "mocha": "^10.4.0",
+    "should": "^13.2.3",
+    "node-red-node-test-helper": "^0.3.3"
   },
   "node-red": {
     "nodes": {
@@ -20,9 +37,11 @@
     }
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "mocha \"tests/**/*_spec.js\"",
+    "lint": "eslint .",
+    "start": "node-red"
   },
-  "license": "Apache 2",
+  "license": "Apache-2.0",
   "author": "Marc-André Morneau <ma.morneau.1@gmail.com>",
   "main": "odbc.js",
   "repository": {

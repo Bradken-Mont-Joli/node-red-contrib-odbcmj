@@ -1,114 +1,98 @@
 module.exports = function (RED) {
     const odbcModule = require("odbc");
-    const mustache = require("mustache");
-    const objPath = require("object-path");
+    const mustache = require("mustache"); // Utilisé dans runQuery
+    const objPath = require("object-path"); // Utilisé pour mustache et le positionnement du résultat
 
     // --- ODBC Configuration Node ---
     function poolConfig(config) {
         RED.nodes.createNode(this, config);
-        this.config = config; // Contient connectionString, initialSize, retryFreshConnection, etc.
+        this.config = config;
         this.pool = null;
         this.connecting = false;
+        
+        this.credentials = RED.nodes.getCredentials(this.id);
 
-        const enableSyntaxChecker = this.config.syntaxtick;
-        const syntax = this.config.syntax;
-        // Garder une copie de la config originale pour la connexion fraîche si besoin
-        this.originalConfigForFreshConnection = {
-            connectionString: this.config.connectionString,
-            connectionTimeout: parseInt(this.config.connectionTimeout) || 0, // Assurer un integer, 0 pour certains drivers signifie pas de timeout spécifique à l'appel connect
-            loginTimeout: parseInt(this.config.loginTimeout) || 0,
+        this._buildConnectionString = function() {
+            if (this.config.connectionMode === 'structured') {
+                if (!this.config.dbType || !this.config.server) {
+                    throw new Error("En mode structuré, le type de base de données et le serveur sont requis.");
+                }
+                let driver;
+                let parts = [];
+                switch (this.config.dbType) {
+                    case 'sqlserver': driver = 'ODBC Driver 17 for SQL Server'; break;
+                    case 'postgresql': driver = 'PostgreSQL Unicode'; break;
+                    case 'mysql': driver = 'MySQL ODBC 8.0 Unicode Driver'; break;
+                    default: driver = this.config.driver || ''; break;
+                }
+                if(driver) parts.unshift(`DRIVER={${driver}}`);
+                parts.push(`SERVER=${this.config.server}`);
+                if (this.config.database) parts.push(`DATABASE=${this.config.database}`);
+                if (this.config.user) parts.push(`UID=${this.config.user}`);
+                if (this.credentials && this.credentials.password) parts.push(`PWD=${this.credentials.password}`);
+                return parts.join(';');
+            } else {
+                let connStr = this.config.connectionString || "";
+                if (this.credentials && this.credentials.password && connStr.includes('{{{password}}}')) {
+                    connStr = connStr.replace('{{{password}}}', this.credentials.password);
+                }
+                return connStr;
+            }
         };
 
-        delete this.config.syntaxtick; // Ces champs ne sont pas pour odbc.pool directement
-        // delete this.config.syntax; // 'syntax' pourrait être utile si odbc.pool l'acceptait
-
-        this.parser = enableSyntaxChecker
-            ? new require("node-sql-parser/build/" + syntax).Parser()
-            : null;
-
-        for (const [key, value] of Object.entries(this.config)) {
-            if (!isNaN(parseInt(value))) {
-                this.config[key] = parseInt(value);
-            }
-        }
-        // 'retryFreshConnection' est déjà dans this.config grâce à la création du noeud
-
         this.connect = async () => {
-            // Si le pool n'existe pas (ou a été reset), on le crée
             if (!this.pool) {
                 this.connecting = true;
-                this.status({
-                    fill: "yellow",
-                    shape: "dot",
-                    text: "Pool init...",
-                });
+                this.status({ fill: "yellow", shape: "dot", text: "Pool init..." });
                 try {
-                    // Utiliser une copie de la config sans retryFreshConnection pour odbc.pool
+                    const finalConnectionString = this._buildConnectionString();
+                    if (!finalConnectionString) throw new Error("La chaîne de connexion est vide.");
+                    
                     const poolParams = { ...this.config };
-                    delete poolParams.retryFreshConnection;
-                    delete poolParams.syntax; // Retiré car non utilisé par odbc.pool
+                    poolParams.connectionString = finalConnectionString;
 
+                    ['retryFreshConnection', 'retryDelay', 'retryOnMsg', 'syntax', 'connectionMode', 'dbType', 'server', 'database', 'user', 'driver'].forEach(k => delete poolParams[k]);
+                    
                     this.pool = await odbcModule.pool(poolParams);
                     this.connecting = false;
-                    this.status({
-                        fill: "green",
-                        shape: "dot",
-                        text: "Pool ready",
-                    });
+                    this.status({ fill: "green", shape: "dot", text: "Pool ready" });
                     this.log("Connection pool initialized successfully.");
                 } catch (error) {
                     this.connecting = false;
-                    this.error(
-                        `Error creating connection pool: ${error}`,
-                        error
-                    );
-                    this.status({
-                        fill: "red",
-                        shape: "ring",
-                        text: "Pool error",
-                    });
+                    this.error(`Error creating connection pool: ${error.message}`, error);
+                    this.status({ fill: "red", shape: "ring", text: "Pool error" });
                     throw error;
                 }
             }
-            // Quoi qu'il arrive, on demande une connexion au pool (qui pourrait être fraîchement créé)
             try {
                 return await this.pool.connect();
             } catch (poolConnectError) {
-                this.error(
-                    `Error connecting to pool: ${poolConnectError}`,
-                    poolConnectError
-                );
-                this.status({
-                    fill: "red",
-                    shape: "ring",
-                    text: "Pool connect err",
-                });
+                this.error(`Error connecting to pool: ${poolConnectError}`, poolConnectError);
+                this.status({ fill: "red", shape: "ring", text: "Pool connect err" });
                 throw poolConnectError;
             }
         };
 
-        // --- NOUVELLE MÉTHODE: resetPool ---
+        this.getFreshConnectionConfig = function() {
+            return {
+                connectionString: this._buildConnectionString(),
+                connectionTimeout: parseInt(this.config.connectionTimeout) || 0,
+                loginTimeout: parseInt(this.config.loginTimeout) || 0,
+            };
+        };
+
         this.resetPool = async () => {
-            if (this.pool) {
+             if (this.pool) {
                 this.log("Resetting connection pool.");
-                this.status({
-                    fill: "yellow",
-                    shape: "ring",
-                    text: "Resetting pool...",
-                });
+                this.status({ fill: "yellow", shape: "ring", text: "Resetting pool..." });
                 try {
                     await this.pool.close();
                     this.log("Connection pool closed successfully for reset.");
                 } catch (closeError) {
-                    this.error(
-                        `Error closing pool during reset: ${closeError}`,
-                        closeError
-                    );
-                    // Continuer pour nullifier le pool même en cas d'erreur de fermeture
+                    this.error(`Error closing pool during reset: ${closeError}`, closeError);
                 } finally {
                     this.pool = null;
-                    this.connecting = false; // Permet à this.connect de recréer le pool
-                    // Le statut sera mis à jour par la prochaine tentative de connexion via this.connect()
+                    this.connecting = false;
                 }
             } else {
                 this.log("Pool reset requested, but no active pool to reset.");
@@ -116,606 +100,347 @@ module.exports = function (RED) {
         };
 
         this.on("close", async (removed, done) => {
-            // 'removed' est true si le noeud est supprimé, false si juste redéployé.
-            // Nous voulons fermer le pool dans les deux cas si nous en sommes propriétaires.
             this.log("Closing ODBC config node. Attempting to close pool.");
             if (this.pool) {
                 try {
                     await this.pool.close();
-                    this.log(
-                        "Connection pool closed successfully on node close."
-                    );
+                    this.log("Connection pool closed successfully on node close.");
                     this.pool = null;
                 } catch (error) {
-                    this.error(
-                        `Error closing connection pool on node close: ${error}`,
-                        error
-                    );
+                    this.error(`Error closing connection pool on node close: ${error}`, error);
                 }
             }
             done();
         });
     }
 
-    RED.nodes.registerType("odbc config", poolConfig);
+    RED.nodes.registerType("odbc config", poolConfig, {
+        credentials: {
+            password: { type: "password" }
+        }
+    });
+
+    RED.httpAdmin.post("/odbc_config/:id/test", RED.auth.needsPermission("odbc.write"), async function(req, res) {
+        const tempConfig = req.body;
+        const tempCredentials = { password: tempConfig.password };
+        delete tempConfig.password;
+
+        const buildTestConnectionString = () => {
+             if (tempConfig.connectionMode === 'structured') {
+                if (!tempConfig.dbType || !tempConfig.server) return res.status(400).send("Mode structuré : le type de BD et le serveur sont requis.");
+                let driver;
+                let parts = [];
+                switch (tempConfig.dbType) {
+                    case 'sqlserver': driver = 'ODBC Driver 17 for SQL Server'; break;
+                    case 'postgresql': driver = 'PostgreSQL Unicode'; break;
+                    case 'mysql': driver = 'MySQL ODBC 8.0 Unicode Driver'; break;
+                    default: driver = tempConfig.driver || ''; break;
+                }
+                if(driver) parts.unshift(`DRIVER={${driver}}`);
+                parts.push(`SERVER=${tempConfig.server}`);
+                if (tempConfig.database) parts.push(`DATABASE=${tempConfig.database}`);
+                if (tempConfig.user) parts.push(`UID=${tempConfig.user}`);
+                if (tempCredentials.password) parts.push(`PWD=${tempCredentials.password}`);
+                return parts.join(';');
+            } else {
+                let connStr = tempConfig.connectionString || "";
+                if (tempCredentials.password && connStr.includes('{{{password}}}')) {
+                    connStr = connStr.replace('{{{password}}}', tempCredentials.password);
+                }
+                return connStr;
+            }
+        };
+
+        let connection;
+        try {
+            const testConnectionString = buildTestConnectionString();
+            if (!testConnectionString) return res.status(400).send("La chaîne de connexion est vide.");
+            connection = await odbcModule.connect(testConnectionString);
+            res.sendStatus(200);
+        } catch (err) {
+            res.status(500).send(err.message || "Erreur inconnue durant le test.");
+        } finally {
+            if (connection) await connection.close();
+        }
+    });
 
     // --- ODBC Query Node ---
     function odbc(config) {
         RED.nodes.createNode(this, config);
         this.config = config;
-        this.poolNode = RED.nodes.getNode(this.config.connection); // C'est le noeud 'odbc config'
+        this.poolNode = RED.nodes.getNode(this.config.connection);
         this.name = this.config.name;
+        this.isAwaitingRetry = false;
+        this.retryTimer = null;
 
-        // --- NOUVELLE MÉTHODE: Helper pour améliorer les messages d'erreur ---
-        this.enhanceError = (
-            error,
-            query,
-            params,
-            defaultMessage = "Query error"
-        ) => {
+        this.enhanceError = (error, query, params, defaultMessage = "Query error") => {
             const queryContext = (() => {
                 let s = "";
                 if (query || params) {
                     s += " {";
-                    if (query)
-                        s += `"query": '${query.substring(0, 100)}${
-                            query.length > 100 ? "..." : ""
-                        }'`; // Tronquer les longues requêtes
+                    if (query) s += `"query": '${query.substring(0, 100)}${query.length > 100 ? "..." : ""}'`;
                     if (params) s += `, "params": '${JSON.stringify(params)}'`;
                     s += "}";
                     return s;
                 }
                 return "";
             })();
-
             let finalError;
-            if (typeof error === "object" && error !== null && error.message) {
-                finalError = error;
-            } else if (typeof error === "string") {
-                finalError = new Error(error);
-            } else {
-                finalError = new Error(defaultMessage);
-            }
-
+            if (typeof error === "object" && error !== null && error.message) { finalError = error; } 
+            else if (typeof error === "string") { finalError = new Error(error); }
+            else { finalError = new Error(defaultMessage); }
             finalError.message = `${finalError.message}${queryContext}`;
             if (query) finalError.query = query;
             if (params) finalError.params = params;
-
             return finalError;
         };
 
-        // --- NOUVELLE MÉTHODE: Helper pour exécuter la requête et traiter le résultat ---
-        // Prend une connexion (du pool ou fraîche) en argument
-        this.executeQueryAndProcess = async (
-            dbConnection,
-            queryString,
-            queryParams,
-            isPreparedStatement,
-            msg
-        ) => {
+        this.executeQueryAndProcess = async (dbConnection, queryString, queryParams, isPreparedStatement, msg) => {
             let result;
-            // Exécution de la requête
             if (isPreparedStatement) {
                 const stmt = await dbConnection.createStatement();
                 try {
                     await stmt.prepare(queryString);
-                    await stmt.bind(queryParams); // queryParams vient de msg.parameters
+                    await stmt.bind(queryParams);
                     result = await stmt.execute();
                 } finally {
-                    // Assurer la fermeture du statement même en cas d'erreur de execute()
-                    // stmt.close() peut être synchrone ou asynchrone selon les drivers/versions de odbc
                     if (stmt && typeof stmt.close === "function") {
-                        try {
-                            await stmt.close();
-                        } catch (stmtCloseError) {
-                            this.warn(
-                                `Error closing statement: ${stmtCloseError}`
-                            );
-                        }
+                        try { await stmt.close(); } catch (stmtCloseError) { this.warn(`Error closing statement: ${stmtCloseError}`); }
                     }
                 }
             } else {
-                result = await dbConnection.query(queryString, queryParams); // queryParams ici aussi
+                result = await dbConnection.query(queryString, queryParams);
             }
-
-            if (typeof result === "undefined") {
-                // Certains drivers/erreurs pourraient retourner undefined
-                throw new Error(
-                    "Query returned undefined. Check for errors or empty results."
-                );
-            }
-
-            // Traitement du résultat (SQL_BIT, otherParams, etc.)
-            // Créer une copie du message pour éviter de modifier l'original en cas de retry
+            if (typeof result === "undefined") { throw new Error("Query returned undefined."); }
             const newMsg = RED.util.cloneMessage(msg);
-
             const otherParams = {};
             let actualDataRows = [];
-
             if (result !== null && typeof result === "object") {
-                // Si result est un array, il contient les lignes.
-                // Les propriétés non-numériques (comme .columns, .count) sont extraites.
                 if (Array.isArray(result)) {
-                    actualDataRows = [...result]; // Copie des lignes
+                    actualDataRows = [...result];
                     for (const [key, value] of Object.entries(result)) {
-                        if (isNaN(parseInt(key))) {
-                            otherParams[key] = value;
-                        }
+                        if (isNaN(parseInt(key))) { otherParams[key] = value; }
                     }
                 } else {
-                    // Si result est un objet mais pas un array (ex: { count: 0, columns: [...] })
-                    // Il n'y a pas de "lignes" au sens array, mais otherParams peut contenir des metadonnées.
-                    for (const [key, value] of Object.entries(result)) {
-                        otherParams[key] = value;
-                    }
+                    for (const [key, value] of Object.entries(result)) { otherParams[key] = value; }
                 }
             }
-
             const columnMetadata = otherParams.columns;
-            if (
-                Array.isArray(columnMetadata) &&
-                Array.isArray(actualDataRows) &&
-                actualDataRows.length > 0
-            ) {
+            if (Array.isArray(columnMetadata) && Array.isArray(actualDataRows) && actualDataRows.length > 0) {
                 const sqlBitColumnNames = new Set();
                 columnMetadata.forEach((col) => {
-                    if (
-                        col &&
-                        typeof col.name === "string" &&
-                        col.dataTypeName === "SQL_BIT"
-                    ) {
+                    if (col && typeof col.name === "string" && col.dataTypeName === "SQL_BIT") {
                         sqlBitColumnNames.add(col.name);
                     }
                 });
-
                 if (sqlBitColumnNames.size > 0) {
                     actualDataRows.forEach((row) => {
                         if (typeof row === "object" && row !== null) {
                             for (const columnName of sqlBitColumnNames) {
                                 if (row.hasOwnProperty(columnName)) {
                                     const value = row[columnName];
-                                    if (value === "1" || value === 1) {
-                                        row[columnName] = true;
-                                    } else if (value === "0" || value === 0) {
-                                        row[columnName] = false;
-                                    }
+                                    if (value === "1" || value === 1) { row[columnName] = true; } 
+                                    else if (value === "0" || value === 0) { row[columnName] = false; }
                                 }
                             }
                         }
                     });
                 }
             }
-
             objPath.set(newMsg, this.config.outputObj, actualDataRows);
-
             if (this.poolNode?.parser && queryString) {
                 try {
-                    // Utiliser structuredClone est une bonne pratique pour éviter les modifications par référence
-                    newMsg.parsedQuery = this.poolNode.parser.astify(
-                        structuredClone(queryString)
-                    );
+                    newMsg.parsedQuery = this.poolNode.parser.astify(structuredClone(queryString));
                 } catch (syntaxError) {
-                    this.warn(
-                        `Could not parse query for parsedQuery output: ${syntaxError}`
-                    );
+                    this.warn(`Could not parse query for parsedQuery output: ${syntaxError}`);
                 }
             }
-
-            if (Object.keys(otherParams).length) {
-                newMsg.odbc = otherParams;
-            }
+            if (Object.keys(otherParams).length) { newMsg.odbc = otherParams; }
             return newMsg;
         };
-
-        this.runQuery = async function (msg, send, done) {
-            let currentQueryString = this.config.query || ""; // Initialiser avec la config du noeud
-            let currentQueryParams = msg.parameters; // Peut être undefined
-            let isPreparedStatement = false;
-            let connectionFromPool = null; // Pour s'assurer de sa fermeture
-
+        
+        this.executeStreamQuery = async (dbConnection, queryString, queryParams, msg, send, done) => {
+            const chunkSize = parseInt(this.config.streamChunkSize) || 1;
+            let cursor;
+            let rowCount = 0;
+            let chunk = [];
+            
             try {
-                this.status({
-                    fill: "blue",
-                    shape: "dot",
-                    text: "querying...",
-                });
-                this.config.outputObj =
-                    msg?.output || this.config?.outputObj || "payload";
+                cursor = await dbConnection.cursor(queryString, queryParams);
+                this.status({ fill: "blue", shape: "dot", text: "streaming rows..." });
+                let row = await cursor.fetch();
+                while (row) {
+                    rowCount++;
+                    chunk.push(row);
+                    if (chunk.length >= chunkSize) {
+                        const newMsg = RED.util.cloneMessage(msg);
+                        objPath.set(newMsg, this.config.outputObj, chunk);
+                        newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: false };
+                        send(newMsg);
+                        chunk = [];
+                    }
+                    row = await cursor.fetch();
+                }
+                if (chunk.length > 0) {
+                    const newMsg = RED.util.cloneMessage(msg);
+                    objPath.set(newMsg, this.config.outputObj, chunk);
+                    newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: true };
+                    send(newMsg);
+                }
+                if (rowCount === 0) {
+                     const newMsg = RED.util.cloneMessage(msg);
+                     objPath.set(newMsg, this.config.outputObj, []);
+                     newMsg.odbc_stream = { index: 0, count: 0, complete: true };
+                     send(newMsg);
+                }
+                this.status({ fill: "green", shape: "dot", text: `success (${rowCount} rows)` });
+                if(done) done();
+            } catch(err) {
+                throw err;
+            }
+            finally {
+                if (cursor) await cursor.close();
+            }
+        };
 
-                // --- Construction de la requête (adapté de l'original) ---
-                // Déterminer si c'est un prepared statement AVANT le render mustache
-                isPreparedStatement =
-                    currentQueryParams ||
-                    (currentQueryString && currentQueryString.includes("?"));
+        this.runQuery = async (msg, send, done) => {
+             let currentQueryString = this.config.query || "";
+             let currentQueryParams = msg.parameters;
+             let isPreparedStatement = false;
+             let connectionFromPool = null;
 
+             try {
+                this.status({ fill: "blue", shape: "dot", text: "preparing..." });
+                this.config.outputObj = msg?.output || this.config?.outputObj || "payload";
+
+                isPreparedStatement = currentQueryParams || (currentQueryString && currentQueryString.includes("?"));
                 if (!isPreparedStatement && currentQueryString) {
-                    // Mustache rendering uniquement si ce n'est pas un PS avec des '?'
-                    // Et si currentQueryString est défini
                     for (const parsed of mustache.parse(currentQueryString)) {
-                        if (parsed[0] === "name" || parsed[0] === "&") {
-                            if (!objPath.has(msg, parsed[1])) {
-                                this.warn(
-                                    `Mustache parameter "${parsed[1]}" is absent and will render to undefined`
-                                );
-                            }
+                        if ((parsed[0] === "name" || parsed[0] === "&") && !objPath.has(msg, parsed[1])) {
+                            this.warn(`Mustache parameter "${parsed[1]}" is absent.`);
                         }
                     }
-                    currentQueryString = mustache.render(
-                        currentQueryString,
-                        msg
-                    );
+                    currentQueryString = mustache.render(currentQueryString, msg);
                 }
+                if (msg?.query) { currentQueryString = msg.query; }
+                if (!currentQueryString) { throw new Error("No query to execute"); }
 
-                if (msg?.query) {
-                    // Priorité à msg.query
-                    if (
-                        currentQueryString &&
-                        currentQueryString !== this.config.query
-                    ) {
-                        this.log(
-                            "Query from node config (possibly mustache rendered) was overwritten by msg.query."
-                        );
-                    } else if (this.config.query) {
-                        this.log(
-                            "Query from node config was overwritten by msg.query."
-                        );
+                const execute = async (conn) => {
+                    if (this.config.streaming) {
+                        await this.executeStreamQuery(conn, currentQueryString, currentQueryParams, msg, send, done);
+                    } else {
+                        const processedMsg = await this.executeQueryAndProcess(conn, currentQueryString, currentQueryParams, isPreparedStatement, msg);
+                        this.status({ fill: "green", shape: "dot", text: "success" });
+                        send(processedMsg);
+                        if(done) done();
                     }
-                    currentQueryString = msg.query;
-                } else if (msg?.payload) {
-                    // Ensuite msg.payload.query ou msg.payload (si string)
-                    if (typeof msg.payload === "string") {
-                        try {
-                            const payloadJson = JSON.parse(msg.payload);
-                            if (
-                                payloadJson?.query &&
-                                typeof payloadJson.query === "string"
-                            ) {
-                                currentQueryString = payloadJson.query;
-                            }
-                        } catch (err) {
-                            /* Pas un JSON ou pas de query, on ignore */
-                        }
-                    } else if (
-                        msg.payload?.query &&
-                        typeof msg.payload.query === "string"
-                    ) {
-                        currentQueryString = msg.payload.query;
-                    }
-                }
+                };
 
-                if (!currentQueryString) {
-                    throw new Error("No query to execute");
-                }
-
-                // Re-vérifier isPreparedStatement si query a changé, et valider les paramètres
-                isPreparedStatement =
-                    currentQueryParams ||
-                    (currentQueryString && currentQueryString.includes("?"));
-
-                if (isPreparedStatement) {
-                    if (!currentQueryParams) {
-                        throw new Error(
-                            "Prepared statement ('?' in query) requires msg.parameters to be provided."
-                        );
-                    }
-                    if (
-                        typeof currentQueryParams === "object" &&
-                        !Array.isArray(currentQueryParams)
-                    ) {
-                        // Tentative de mapper un objet à un array basé sur les noms dans la query (simplifié)
-                        // Cette logique est complexe et sujette à erreur si les noms ne matchent pas parfaitement.
-                        // La documentation originale suggère un mapping auto, mais c'est risqué.
-                        // Pour l'instant, on se fie à l'ordre si c'est un objet.
-                        // Une solution plus robuste serait d'analyser la query pour les noms de paramètres si le driver le supporte.
-                        // Ou d'exiger un array pour les '?'
-                        // Pour l'instant, on va assumer que si c'est un objet, l'utilisateur a une logique spécifique ou le driver le gère
-                        // La logique originale de mappage par nom de paramètre dans `()` est retirée pour simplification,
-                        // car elle est très spécifique et peut ne pas être standard.
-                        // this.warn("msg.parameters is an object for a '?' prepared statement. Order of properties will be used. For explicit order, use an array.");
-                        // currentQueryParams = Object.values(currentQueryParams); // Ceci est une supposition sur l'ordre.
-                        // La meilleure approche est de demander un Array pour les '?'
-                        if (
-                            (currentQueryString.match(/\?/g) || []).length !==
-                                Object.keys(currentQueryParams).length &&
-                            (currentQueryString.match(/\?/g) || []).length !==
-                                currentQueryParams.length
-                        ) {
-                            // La logique originale pour mapper les noms de paramètres pour les '?' était `this.queryString.match(/\(([^)]*)\)/)[1].split(",").map((el) => el.trim());`
-                            // Ceci n'est pas standard pour les `?`. Normalement, `?` attend un array.
-                            // On va laisser le driver/odbc gérer si `msg.parameters` est un objet.
-                            // Mais on va vérifier le nombre de `?` vs la taille de `msg.parameters` si c'est un array.
-                            // Si c'est un objet, on ne peut pas facilement vérifier le nombre.
-                        }
-                    }
-                    if (
-                        !Array.isArray(currentQueryParams) &&
-                        typeof currentQueryParams !== "object"
-                    ) {
-                        // Doit être array ou objet
-                        throw new Error(
-                            "msg.parameters must be an array or an object for prepared statements."
-                        );
-                    }
-                    if (
-                        Array.isArray(currentQueryParams) &&
-                        (currentQueryString.match(/\?/g) || []).length !==
-                            currentQueryParams.length
-                    ) {
-                        throw new Error(
-                            "Incorrect number of parameters in msg.parameters array for '?' placeholders."
-                        );
-                    }
-                }
-
-                // Validation du champ de sortie
-                if (!this.config.outputObj) {
-                    throw new Error(
-                        "Invalid output object definition (outputObj is empty)"
-                    );
-                }
-                const reg = new RegExp(
-                    '^((?![,;:`\\[\\]{}+=()!"$%?&*|<>\\/^¨`\\s]).)*$'
-                );
-                if (
-                    !this.config.outputObj.match(reg) ||
-                    this.config.outputObj.startsWith(".") ||
-                    this.config.outputObj.endsWith(".")
-                ) {
-                    throw new Error(
-                        `Invalid output field name: ${this.config.outputObj}`
-                    );
-                }
-
-                // --- Première tentative avec une connexion du pool ---
                 let firstAttemptError = null;
                 try {
                     connectionFromPool = await this.poolNode.connect();
-                    if (!connectionFromPool) {
-                        // Devrait être géré par poolNode.connect() qui throw une erreur
-                        throw new Error(
-                            "Failed to get connection from pool (returned null)"
-                        );
-                    }
-                    this.status({
-                        fill: "blue",
-                        shape: "dot",
-                        text: "Pool conn OK. Executing...",
-                    });
-
-                    const processedMsg = await this.executeQueryAndProcess(
-                        connectionFromPool,
-                        currentQueryString,
-                        currentQueryParams,
-                        isPreparedStatement,
-                        msg
-                    );
-                    this.status({
-                        fill: "green",
-                        shape: "dot",
-                        text: "success",
-                    });
-                    send(processedMsg);
-                    if (done) done();
-                    return; // Succès à la première tentative
+                    await execute(connectionFromPool);
+                    return;
                 } catch (err) {
-                    firstAttemptError = this.enhanceError(
-                        err,
-                        currentQueryString,
-                        currentQueryParams,
-                        "Query failed with pooled connection"
-                    );
-                    this.warn(
-                        `First attempt failed: ${firstAttemptError.message}`
-                    );
-                    // Ne pas remonter l'erreur tout de suite, on va peut-être retenter
+                    firstAttemptError = this.enhanceError(err, currentQueryString, currentQueryParams, "Query failed with pooled connection");
+                    this.warn(`First attempt failed: ${firstAttemptError.message}`);
                 } finally {
-                    if (connectionFromPool) {
-                        try {
-                            await connectionFromPool.close(); // Toujours fermer/remettre la connexion au pool
-                        } catch (closeErr) {
-                            this.warn(
-                                `Error closing pooled connection: ${closeErr}`
-                            );
-                        }
-                        connectionFromPool = null;
-                    }
+                    if (connectionFromPool) await connectionFromPool.close();
                 }
 
-                // --- Si la première tentative a échoué (firstAttemptError est défini) ---
                 if (firstAttemptError) {
-                    if (
-                        this.poolNode &&
-                        this.poolNode.config.retryFreshConnection
-                    ) {
+                    if (this.poolNode && this.poolNode.config.retryFreshConnection) {
                         this.log("Attempting retry with a fresh connection.");
-                        this.status({
-                            fill: "yellow",
-                            shape: "dot",
-                            text: "Retrying (fresh)...",
-                        });
-
+                        this.status({ fill: "yellow", shape: "dot", text: "Retrying (fresh)..." });
                         let freshConnection = null;
                         try {
-                            // Utiliser les paramètres de connexion originaux stockés dans poolNode
-                            const freshConnectConfig =
-                                this.poolNode.originalConfigForFreshConnection;
-                            if (
-                                !freshConnectConfig ||
-                                !freshConnectConfig.connectionString
-                            ) {
-                                throw new Error(
-                                    "Fresh connection configuration is missing in poolNode."
-                                );
-                            }
-                            freshConnection = await odbcModule.connect(
-                                freshConnectConfig
-                            );
+                            const freshConnectConfig = this.poolNode.getFreshConnectionConfig();
+                            freshConnection = await odbcModule.connect(freshConnectConfig);
                             this.log("Fresh connection established for retry.");
-
-                            const processedFreshMsg =
-                                await this.executeQueryAndProcess(
-                                    freshConnection,
-                                    currentQueryString,
-                                    currentQueryParams,
-                                    isPreparedStatement,
-                                    msg
-                                );
-
-                            this.log(
-                                "Query successful with fresh connection. Resetting pool."
-                            );
-                            this.status({
-                                fill: "green",
-                                shape: "dot",
-                                text: "Success (fresh)",
-                            });
-                            send(processedFreshMsg);
-
-                            if (this.poolNode.resetPool) {
-                                await this.poolNode.resetPool(); // Demander au pool de se réinitialiser
-                            } else {
-                                this.warn(
-                                    "poolNode.resetPool is not available. Pool cannot be reset automatically."
-                                );
-                            }
-
-                            if (done) done();
-                            return; // Succès à la seconde tentative
+                            await execute(freshConnection);
+                            this.log("Query successful with fresh connection. Resetting pool.");
+                            await this.poolNode.resetPool();
+                            return;
                         } catch (freshError) {
-                            this.warn(
-                                `Retry with fresh connection also failed: ${freshError.message}`
-                            );
-                            // L'erreur finale sera celle de la tentative fraîche
-                            throw this.enhanceError(
-                                freshError,
-                                currentQueryString,
-                                currentQueryParams,
-                                "Query failed on fresh connection retry"
-                            );
-                        } finally {
-                            if (freshConnection) {
-                                try {
-                                    await freshConnection.close();
-                                    this.log("Fresh connection closed.");
-                                } catch (closeFreshErr) {
-                                    this.warn(
-                                        `Error closing fresh connection: ${closeFreshErr}`
-                                    );
-                                }
+                            this.warn(`Retry with fresh connection also failed: ${freshError.message}`);
+                            const retryDelay = parseInt(this.poolNode.config.retryDelay) || 0;
+                            if (retryDelay > 0) {
+                                this.isAwaitingRetry = true;
+                                this.status({ fill: "red", shape: "ring", text: `Retry in ${retryDelay}s...` });
+                                this.log(`Scheduling retry in ${retryDelay} seconds.`);
+                                this.retryTimer = setTimeout(() => {
+                                    this.isAwaitingRetry = false;
+                                    this.log("Timer expired. Triggering scheduled retry.");
+                                    this.receive(msg);
+                                }, retryDelay * 1000);
+                                if (done) done();
+                            } else {
+                                throw this.enhanceError(freshError, currentQueryString, currentQueryParams, "Query failed on fresh connection retry");
                             }
+                        } finally {
+                            if (freshConnection) await freshConnection.close();
                         }
                     } else {
-                        // retryFreshConnection n'est pas activé, donc on lance l'erreur de la première tentative
                         throw firstAttemptError;
                     }
                 }
-            } catch (err) {
-                // Catch global pour runQuery
-                // Assurer que err est bien un objet Error
-                const finalError =
-                    err instanceof Error ? err : new Error(String(err));
-
-                this.status({
-                    fill: "red",
-                    shape: "ring",
-                    text:
-                        finalError.message && finalError.message.length < 30
-                            ? finalError.message.substring(0, 29) + "..."
-                            : "query error",
-                });
-
-                if (done) {
-                    done(finalError); // Passer l'erreur au callback done de Node-RED
-                } else {
-                    this.error(finalError, msg); // Utiliser this.error pour logguer l'erreur correctement
-                }
-            }
-        }; // Fin de runQuery
+             } catch (err) {
+                 const finalError = err instanceof Error ? err : new Error(String(err));
+                 this.status({ fill: "red", shape: "ring", text: "query error" });
+                 if (done) { done(finalError); } else { this.error(finalError, msg); }
+             }
+        };
 
         this.checkPool = async function (msg, send, done) {
             try {
-                if (!this.poolNode) {
-                    throw new Error(
-                        "ODBC Connection Configuration node is not properly configured or deployed."
-                    );
-                }
+                if (!this.poolNode) { throw new Error("ODBC Config node not properly configured."); }
                 if (this.poolNode.connecting) {
-                    // Si le pool est en cours d'initialisation
                     this.warn("Waiting for connection pool to initialize...");
-                    this.status({
-                        fill: "yellow",
-                        shape: "ring",
-                        text: "Waiting for pool",
-                    });
+                    this.status({ fill: "yellow", shape: "ring", text: "Waiting for pool" });
                     setTimeout(() => {
                         this.checkPool(msg, send, done).catch((err) => {
-                            // Gérer l'erreur de la tentative retardée si elle échoue aussi.
-                            this.status({
-                                fill: "red",
-                                shape: "dot",
-                                text: "Pool wait failed",
-                            });
-                            if (done) {
-                                done(err);
-                            } else {
-                                this.error(err, msg);
-                            }
+                            this.status({ fill: "red", shape: "dot", text: "Pool wait failed" });
+                            if (done) { done(err); } else { this.error(err, msg); }
                         });
-                    }, 1000); // Réessayer après 1 seconde
+                    }, 1000);
                     return;
                 }
-
-                // Si le pool n'est pas encore initialisé (ex: premier message après déploiement),
-                // poolNode.connect() va le faire.
-                // La logique de this.poolNode.connecting doit être gérée DANS poolNode.connect()
-
                 await this.runQuery(msg, send, done);
             } catch (err) {
-                // Catch pour checkPool (erreurs avant même d'appeler runQuery, ou erreurs non gérées par runQuery)
-                const finalError =
-                    err instanceof Error ? err : new Error(String(err));
-                this.status({
-                    fill: "red",
-                    shape: "dot",
-                    text:
-                        finalError.message && finalError.message.length < 30
-                            ? finalError.message.substring(0, 29) + "..."
-                            : "Op failed",
-                });
-                if (done) {
-                    done(finalError);
-                } else {
-                    this.error(finalError, msg);
-                }
+                const finalError = err instanceof Error ? err : new Error(String(err));
+                this.status({ fill: "red", shape: "dot", text: "Op failed" });
+                if (done) { done(finalError); } else { this.error(finalError, msg); }
             }
         };
 
         this.on("input", async (msg, send, done) => {
-            // Envelopper l'appel à checkPool dans un try-catch au cas où checkPool lui-même aurait une erreur synchrone non gérée
+            if (this.isAwaitingRetry) {
+                if (this.poolNode && this.poolNode.config.retryOnMsg) {
+                    this.log("New message received, overriding retry timer and attempting query now.");
+                    clearTimeout(this.retryTimer);
+this.retryTimer = null;
+                    this.isAwaitingRetry = false;
+                } else {
+                    this.warn("Node is in a retry-wait state. New message ignored as per configuration.");
+                    if (done) done();
+                    return;
+                }
+            }
             try {
                 await this.checkPool(msg, send, done);
             } catch (error) {
-                const finalError =
-                    error instanceof Error ? error : new Error(String(error));
-                this.status({
-                    fill: "red",
-                    shape: "ring",
-                    text: "Input error",
-                });
-                if (done) {
-                    done(finalError);
-                } else {
-                    this.error(finalError, msg);
-                }
+                const finalError = error instanceof Error ? error : new Error(String(error));
+                this.status({ fill: "red", shape: "ring", text: "Input error" });
+                if (done) { done(finalError); } else { this.error(finalError, msg); }
             }
         });
 
         this.on("close", async (done) => {
-            // La connexion individuelle (this.connection du code original) est maintenant gérée
-            // à l'intérieur de runQuery (connectionFromPool et freshConnection) et fermée là.
-            // Il n'y a donc plus de this.connection à fermer ici au niveau du noeud odbc.
-            // Le poolNode (config node) gère la fermeture de son pool.
-            this.status({}); // Clear status on close/redeploy
+            if (this.retryTimer) {
+                clearTimeout(this.retryTimer);
+                this.log("Cleared pending retry timer on node close/redeploy.");
+            }
+            this.status({});
             done();
         });
 
@@ -723,9 +448,7 @@ module.exports = function (RED) {
             this.status({ fill: "green", shape: "dot", text: "ready" });
         } else {
             this.status({ fill: "red", shape: "ring", text: "No config node" });
-            this.warn(
-                "ODBC Config node not found or not deployed. Please configure and deploy the ODBC connection config node."
-            );
+            this.warn("ODBC Config node not found or not deployed.");
         }
     }
 
