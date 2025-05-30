@@ -257,14 +257,23 @@ module.exports = function (RED) {
             return newMsg;
         };
         
-        this.executeStreamQuery = async (dbConnection, queryString, queryParams, msg, send, done) => {
+        // =================================================================
+        // DEBUT DE LA SECTION CORRIGÉE
+        // =================================================================
+
+        this.executeStreamQuery = async (queryString, queryParams, msg, send, done) => {
             const chunkSize = parseInt(this.config.streamChunkSize) || 1;
             let cursor;
             let rowCount = 0;
             let chunk = [];
             
             try {
-                cursor = await dbConnection.cursor(queryString, queryParams);
+                // CORRECTION : Appeler .cursor() sur le pool, pas sur une connexion individuelle.
+                if (!this.poolNode || !this.poolNode.pool) {
+                    throw new Error("Le pool de connexions n'est pas initialisé pour le streaming.");
+                }
+                cursor = await this.poolNode.pool.cursor(queryString, queryParams);
+                
                 this.status({ fill: "blue", shape: "dot", text: "streaming rows..." });
                 let row = await cursor.fetch();
                 while (row) {
@@ -294,6 +303,7 @@ module.exports = function (RED) {
                 this.status({ fill: "green", shape: "dot", text: `success (${rowCount} rows)` });
                 if(done) done();
             } catch(err) {
+                // L'erreur sera transmise à l'appelant (runQuery)
                 throw err;
             }
             finally {
@@ -302,10 +312,10 @@ module.exports = function (RED) {
         };
 
         this.runQuery = async (msg, send, done) => {
-             let isPreparedStatement = false;
-             let connectionFromPool = null;
+            let isPreparedStatement = false;
+            let connectionFromPool = null;
 
-             try {
+            try {
                 this.status({ fill: "blue", shape: "dot", text: "preparing..." });
                 this.config.outputObj = msg?.output || this.config?.outputObj || "payload";
 
@@ -314,18 +324,16 @@ module.exports = function (RED) {
                 const paramsSourceType = this.config.paramsSourceType || 'msg';
                 const paramsSource = this.config.paramsSource || 'parameters';
 
-                let currentQueryParams = await new Promise((resolve, reject) => {
+                let currentQueryParams = await new Promise((resolve) => {
                     RED.util.evaluateNodeProperty(paramsSource, paramsSourceType, this, msg, (err, value) => {
-                        if (err) { resolve(undefined); }
-                        else { resolve(value); }
+                        resolve(err ? undefined : value);
                     });
                 });
 
-                let currentQueryString = await new Promise((resolve, reject) => {
+                let currentQueryString = await new Promise((resolve) => {
                      RED.util.evaluateNodeProperty(querySource, querySourceType, this, msg, (err, value) => {
-                        if (err) { resolve(undefined); }
-                        else { resolve(value || this.config.query || ""); }
-                    });
+                         resolve(err ? undefined : (value || this.config.query || ""));
+                     });
                 });
                 
                 if (!currentQueryString) { throw new Error("No query to execute"); }
@@ -340,71 +348,79 @@ module.exports = function (RED) {
                     currentQueryString = mustache.render(currentQueryString, msg);
                 }
 
-                const execute = async (conn) => {
-                    if (this.config.streaming) {
-                        await this.executeStreamQuery(conn, currentQueryString, currentQueryParams, msg, send, done);
-                    } else {
+                // CORRECTION : Logique séparée pour streaming et non-streaming
+                if (this.config.streaming) {
+                    // Le mode Streaming appelle directement la fonction corrigée
+                    await this.executeStreamQuery(currentQueryString, currentQueryParams, msg, send, done);
+
+                } else {
+                    // Le mode non-streaming utilise la logique de connexion/retry existante
+                    const executeNonQuery = async (conn) => {
                         const processedMsg = await this.executeQueryAndProcess(conn, currentQueryString, currentQueryParams, isPreparedStatement, msg);
                         this.status({ fill: "green", shape: "dot", text: "success" });
                         send(processedMsg);
                         if(done) done();
+                    };
+                    
+                    let firstAttemptError = null;
+                    try {
+                        connectionFromPool = await this.poolNode.connect();
+                        await executeNonQuery(connectionFromPool);
+                        return;
+                    } catch (err) {
+                        firstAttemptError = this.enhanceError(err, currentQueryString, currentQueryParams, "Query failed with pooled connection");
+                        this.warn(`First attempt failed: ${firstAttemptError.message}`);
+                    } finally {
+                        if (connectionFromPool) await connectionFromPool.close();
                     }
-                };
-                
-                let firstAttemptError = null;
-                try {
-                    connectionFromPool = await this.poolNode.connect();
-                    await execute(connectionFromPool);
-                    return;
-                } catch (err) {
-                    firstAttemptError = this.enhanceError(err, currentQueryString, currentQueryParams, "Query failed with pooled connection");
-                    this.warn(`First attempt failed: ${firstAttemptError.message}`);
-                } finally {
-                    if (connectionFromPool) await connectionFromPool.close();
-                }
 
-                if (firstAttemptError) {
-                    if (this.poolNode && this.poolNode.config.retryFreshConnection) {
-                        this.log("Attempting retry with a fresh connection.");
-                        this.status({ fill: "yellow", shape: "dot", text: "Retrying (fresh)..." });
-                        let freshConnection = null;
-                        try {
-                            const freshConnectConfig = this.poolNode.getFreshConnectionConfig();
-                            freshConnection = await odbcModule.connect(freshConnectConfig);
-                            this.log("Fresh connection established for retry.");
-                            await execute(freshConnection);
-                            this.log("Query successful with fresh connection. Resetting pool.");
-                            await this.poolNode.resetPool();
-                            return;
-                        } catch (freshError) {
-                            this.warn(`Retry with fresh connection also failed: ${freshError.message}`);
-                            const retryDelay = parseInt(this.poolNode.config.retryDelay) || 0;
-                            if (retryDelay > 0) {
-                                this.isAwaitingRetry = true;
-                                this.status({ fill: "red", shape: "ring", text: `Retry in ${retryDelay}s...` });
-                                this.log(`Scheduling retry in ${retryDelay} seconds.`);
-                                this.retryTimer = setTimeout(() => {
-                                    this.isAwaitingRetry = false;
-                                    this.log("Timer expired. Triggering scheduled retry.");
-                                    this.receive(msg);
-                                }, retryDelay * 1000);
-                                if (done) done();
-                            } else {
-                                throw this.enhanceError(freshError, currentQueryString, currentQueryParams, "Query failed on fresh connection retry");
+                    if (firstAttemptError) {
+                        if (this.poolNode && this.poolNode.config.retryFreshConnection) {
+                            this.log("Attempting retry with a fresh connection.");
+                            this.status({ fill: "yellow", shape: "dot", text: "Retrying (fresh)..." });
+                            let freshConnection = null;
+                            try {
+                                const freshConnectConfig = this.poolNode.getFreshConnectionConfig();
+                                freshConnection = await odbcModule.connect(freshConnectConfig);
+                                this.log("Fresh connection established for retry.");
+                                await executeNonQuery(freshConnection);
+                                this.log("Query successful with fresh connection. Resetting pool.");
+                                await this.poolNode.resetPool();
+                                return;
+                            } catch (freshError) {
+                                this.warn(`Retry with fresh connection also failed: ${freshError.message}`);
+                                const retryDelay = parseInt(this.poolNode.config.retryDelay) || 0;
+                                if (retryDelay > 0) {
+                                    this.isAwaitingRetry = true;
+                                    this.status({ fill: "red", shape: "ring", text: `Retry in ${retryDelay}s...` });
+                                    this.log(`Scheduling retry in ${retryDelay} seconds.`);
+                                    this.retryTimer = setTimeout(() => {
+                                        this.isAwaitingRetry = false;
+                                        this.log("Timer expired. Triggering scheduled retry.");
+                                        this.receive(msg);
+                                    }, retryDelay * 1000);
+                                    if (done) done();
+                                } else {
+                                    throw this.enhanceError(freshError, currentQueryString, currentQueryParams, "Query failed on fresh connection retry");
+                                }
+                            } finally {
+                                if (freshConnection) await freshConnection.close();
                             }
-                        } finally {
-                            if (freshConnection) await freshConnection.close();
+                        } else {
+                            throw firstAttemptError;
                         }
-                    } else {
-                        throw firstAttemptError;
                     }
                 }
-             } catch (err) {
-                 const finalError = err instanceof Error ? err : new Error(String(err));
-                 this.status({ fill: "red", shape: "ring", text: "query error" });
-                 if (done) { done(finalError); } else { this.error(finalError, msg); }
-             }
+            } catch (err) {
+                const finalError = err instanceof Error ? err : new Error(String(err));
+                this.status({ fill: "red", shape: "ring", text: "query error" });
+                if (done) { done(finalError); } else { this.error(finalError, msg); }
+            }
         };
+        
+        // =================================================================
+        // FIN DE LA SECTION CORRIGÉE
+        // =================================================================
 
         this.checkPool = async function (msg, send, done) {
             try {
@@ -419,6 +435,10 @@ module.exports = function (RED) {
                         });
                     }, 1000);
                     return;
+                }
+                // S'assure que le pool est créé avant toute requête, y compris en streaming
+                if (!this.poolNode.pool) {
+                    await this.poolNode.connect().then(c => c.close()); // Etablit le pool s'il n'existe pas
                 }
                 await this.runQuery(msg, send, done);
             } catch (err) {
