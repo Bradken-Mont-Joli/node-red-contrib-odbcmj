@@ -2,12 +2,10 @@
     RED.nodes.registerType("odbc config", {
         category: "config",
         credentials: {
-            // Le mot de passe est défini comme un "credential" sécurisé
             password: { type: "password" }
         },
         defaults: {
             name: { value: "" },
-            // Nouveaux champs pour le mode de connexion hybride
             connectionMode: { value: "structured" },
             dbType: { value: "sqlserver" },
             driver: { value: "" },
@@ -15,18 +13,15 @@
             database: { value: "" },
             user: { value: "" },
             connectionString: { value: "" },
-            // Champs de pool et timeout
             initialSize: { value: 5 },
             incrementSize: { value: 5 },
             maxSize: { value: 15 },
             shrink: { value: true },
             connectionTimeout: { value: 3 },
             loginTimeout: { value: 3 },
-            // Champs de retry
             retryFreshConnection: { value: false },
             retryDelay: { value: 5, validate: RED.validators.number() },
             retryOnMsg: { value: true },
-            // Champs avancés
             syntaxtick: { value: false },
             syntax: { value: "mysql" },
         },
@@ -36,7 +31,15 @@
         oneditprepare: function () {
             var node = this;
 
-            // Logique pour afficher les bons champs selon le mode de connexion
+            // --- Logique pour les sections déroulantes ---
+            // On ajoute un écouteur de clic sur les en-têtes de section
+            $('.form-section-header').on('click', function() {
+                $(this).toggleClass('expanded');
+                // On fait basculer le conteneur d'options qui suit immédiatement l'en-tête
+                $(this).next('.form-section-content').slideToggle();
+            });
+
+            // --- Logique pour le mode de connexion hybride ---
             function toggleConnectionMode(mode) {
                 if (mode === 'structured') {
                     $(".config-mode-structured").show();
@@ -46,7 +49,6 @@
                     $(".config-mode-string").show();
                 }
             }
-            // Gérer le changement du type de BD pour afficher/cacher le champ driver
             function toggleDriverField(dbType) {
                 if (dbType === 'other') {
                     $("#node-config-driver-row").show();
@@ -55,7 +57,6 @@
                 }
             }
             
-            // Initialisation de l'UI
             $("#node-config-input-connectionMode").on("change", function() {
                 toggleConnectionMode($(this).val());
             }).trigger("change");
@@ -64,36 +65,38 @@
                 toggleDriverField($(this).val());
             }).trigger("change");
 
-
-            // Logique pour le 'Syntax Checker'
+            // --- Logiques pour les cases à cocher ---
             $("#node-config-input-syntaxtick").on("change", function () {
                 $(".input-syntax").toggle(this.checked);
             }).trigger("change");
             
-
-            // Logique pour afficher/masquer les options de retry
             $("#node-config-input-retryFreshConnection").on("change", function() {
                 $(".retry-options").toggle(this.checked);
             }).trigger("change");
 
-
-            // Logique pour le bouton de test de connexion
+            // --- Logique pour le bouton de test ---
             $('#node-config-test-connection').on('click', function() {
                 var button = $(this);
-                var originalText = button.text();
+                var originalText = "Test Connection";
                 var icon = button.find("i");
                 icon.removeClass('fa-bolt').addClass('fa-spinner fa-spin');
                 button.text(' Testing...').prop('disabled', true);
                 
-                // Collecter toutes les données du formulaire
+                var connectionMode = $("#node-config-input-connectionMode").val();
+                
+                // --- CORRECTION : Récupérer le bon mot de passe selon le mode ---
+                var password = (connectionMode === 'structured') 
+                    ? $("#node-config-input-password-structured").val() 
+                    : $("#node-config-input-password-string").val();
+
                 var configData = {
-                    connectionMode: $("#node-config-input-connectionMode").val(),
+                    connectionMode: connectionMode,
                     dbType: $("#node-config-input-dbType").val(),
                     driver: $("#node-config-input-driver").val(),
                     server: $("#node-config-input-server").val(),
                     database: $("#node-config-input-database").val(),
                     user: $("#node-config-input-user").val(),
-                    password: $("#node-config-input-password").val(),
+                    password: password,
                     connectionString: $("#node-config-input-connectionString").val()
                 };
 
@@ -118,6 +121,24 @@
         },
     });
 </script>
+
+<style>
+    .form-section-header {
+        cursor: pointer;
+        padding: 5px;
+        border-bottom: 1px solid #ddd;
+        margin-bottom: 10px;
+    }
+    .form-section-header i.fa-caret-right {
+        transition: transform 0.2s ease-in-out;
+    }
+    .form-section-header.expanded i.fa-caret-right {
+        transform: rotate(90deg);
+    }
+    .form-section-content {
+        padding-left: 20px;
+    }
+</style>
 
 <script type="text/html" data-template-name="odbc config">
     <div class="form-row">
@@ -160,19 +181,19 @@
             <input type="text" id="node-config-input-user">
         </div>
         <div class="form-row">
-            <label for="node-config-input-password"><i class="fa fa-lock"></i> Password</label>
-            <input type="password" id="node-config-input-password">
+            <label for="node-config-input-password-structured"><i class="fa fa-lock"></i> Password</label>
+            <input type="password" id="node-config-input-password-structured">
         </div>
     </div>
     
     <div class="config-mode-string">
         <div class="form-row">
             <label for="node-config-input-connectionString"><i class="fa fa-font"></i> Connection String</label>
-            <input type="text" id="node-config-input-connectionString" placeholder="DRIVER={...};SERVER=...;PWD={{{password}}};">
+            <input type="text" id="node-config-input-connectionString" placeholder="DRIVER={...};PWD={{{password}}};">
         </div>
         <div class="form-row">
-            <label for="node-config-input-password"><i class="fa fa-lock"></i> Password</label>
-            <input type="password" id="node-config-input-password">
+            <label for="node-config-input-password-string"><i class="fa fa-lock"></i> Password</label>
+            <input type="password" id="node-config-input-password-string">
             <span class="form-tips">Use <code>{{{password}}}</code> placeholder in the string above.</span>
         </div>
     </div>
@@ -183,12 +204,79 @@
     </div>
 
     <hr/>
-    <h4><i class="fa fa-sitemap"></i> Pool Options</h4>
-    <hr/>
-    <h4><i class="fa fa-exclamation-triangle"></i> Error Handling & Retry</h4>
-    <hr/>
-    <h4><i class="fa fa-wrench"></i> Advanced</h4>
-    </script>
+    
+    <div class="form-section-header expanded"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-sitemap"></i> Pool Options</h4></div>
+    <div class="form-section-content">
+        <div class="form-row">
+            <label for="node-config-input-initialSize"><i class="fa fa-play"></i> Initial Size</label>
+            <input type="number" id="node-config-input-initialSize" placeholder="5" />
+        </div>
+        <div class="form-row">
+            <label for="node-config-input-incrementSize"><i class="fa fa-plus"></i> Increment Size</label>
+            <input type="number" id="node-config-input-incrementSize" placeholder="5" />
+        </div>
+        <div class="form-row">
+            <label for="node-config-input-maxSize"><i class="fa fa-stop"></i> Max Size</label>
+            <input type="number" id="node-config-input-maxSize" placeholder="15" />
+        </div>
+        <div class="form-row">
+            <label for="node-config-input-shrink"><i class="fa fa-compress"></i> Shrink Pool</label>
+            <input type="checkbox" id="node-config-input-shrink" style="margin-left:0px; vertical-align:top; width:auto !important;" />
+        </div>
+        <div class="form-row">
+            <label for="node-config-input-connectionTimeout"><i class="fa fa-clock-o"></i> Connection Timeout</label>
+            <input type="number" id="node-config-input-connectionTimeout" placeholder="3" style="width: 80px;"/>
+            <span style="margin-left: 5px;">seconds</span>
+        </div>
+        <div class="form-row">
+            <label for="node-config-input-loginTimeout"><i class="fa fa-clock-o"></i> Login Timeout</label>
+            <input type="number" id="node-config-input-loginTimeout" placeholder="3" style="width: 80px;" />
+            <span style="margin-left: 5px;">seconds</span>
+        </div>
+    </div>
+    
+    <div class="form-section-header expanded"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-exclamation-triangle"></i> Error Handling & Retry</h4></div>
+    <div class="form-section-content">
+        <div class="form-row">
+            <label for="node-config-input-retryFreshConnection" style="width: auto;"><i class="fa fa-refresh"></i> Retry with fresh connection</label>
+            <input type="checkbox" id="node-config-input-retryFreshConnection" style="display: inline-block; width: auto; vertical-align: top;" />
+        </div>
+        <div class="retry-options" style="padding-left: 20px;">
+            <div class="form-row">
+                <label for="node-config-input-retryDelay"><i class="fa fa-history"></i> Retry Delay</label>
+                <input type="number" id="node-config-input-retryDelay" placeholder="5" style="width: 80px;" />
+                 <span style="margin-left: 5px;">seconds</span>
+            </div>
+            <div class="form-row">
+                <label for="node-config-input-retryOnMsg" style="width: auto;"><i class="fa fa-envelope-o"></i> Retry on new message</label>
+                <input type="checkbox" id="node-config-input-retryOnMsg" style="display: inline-block; width: auto; vertical-align: top;" />
+            </div>
+        </div>
+    </div>
+
+    <div class="form-section-header"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-wrench"></i> Advanced</h4></div>
+    <div class="form-section-content" style="display: none;">
+         <div class="form-row">
+            <label for="node-config-input-syntaxtick" style="width: auto;"><i class="fa fa-check-square-o"></i> Syntax Checker</label>
+            <input type="checkbox" id="node-config-input-syntaxtick" style="display: inline-block; width: auto; vertical-align: top;" />
+        </div>
+        <div class="form-row input-syntax">
+            <label for="node-config-input-syntax"><i class="fa fa-language"></i> Syntax</label>
+            <select id="node-config-input-syntax" style="width: 70%">
+                <option value="bigquery">BigQuery</option>
+                <option value="db2">DB2</option>
+                <option value="hive">Hive</option>
+                <option value="mariadb">MariaDB</option>
+                <option value="mysql">Mysql</option>
+                <option value="postgresql">PostgresQL</option>
+                <option value="sqlite">Sqlite</option>
+                <option value="transactsql">TransactSQL</option>
+                <option value="flinksql">FlinkSQL</option>
+            </select>
+        </div>
+    </div>
+</script>
+
 
 <script type="text/javascript">
     RED.nodes.registerType("odbc", {
@@ -199,7 +287,6 @@
             connection: { type: "odbc config", required: true },
             query: { value: "" },
             outputObj: { value: "payload" },
-            // Nouveaux champs pour le streaming
             streaming: { value: false },
             streamChunkSize: { value: 1, validate: RED.validators.number() }
         },
@@ -216,7 +303,6 @@
                 value: this.query,
             });
             
-            // Logique pour afficher/cacher le champ de taille de lot
             $("#node-input-streaming").on("change", function() {
                 $(".stream-options").toggle(this.checked);
             }).trigger("change");
@@ -238,30 +324,23 @@
         <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
         <input type="text" id="node-input-name" />
     </div>
-
     <div class="form-row">
         <label for="node-input-connection"><i class="fa fa-cog"></i> Connection</label>
         <input type="text" id="node-input-connection" />
     </div>
-
     <div class="form-row node-text-editor-row">
         <label for="node-input-query" style="width: 100% !important;"><i class="fa fa-search"></i> Query</label>
         <div style="height: 250px;" class="node-text-editor" id="node-input-query-editor"></div>
     </div>
-
     <div class="form-row">
         <label for="node-input-outputObj"><i class="fa fa-edit"></i> Result to</label>
         <span>msg.</span><input type="text" id="node-input-outputObj" placeholder="payload" style="width: 64%;"/>
     </div>
-
     <hr/>
-    <h4><i class="fa fa-sliders"></i> Advanced Options</h4>
-
     <div class="form-row">
         <label for="node-input-streaming" style="width: auto;"><i class="fa fa-arrows-v"></i> Stream Results</label>
         <input type="checkbox" id="node-input-streaming" style="display: inline-block; width: auto; vertical-align: top;">
     </div>
-
     <div class="form-row stream-options">
         <label for="node-input-streamChunkSize"><i class="fa fa-bars"></i> Chunk Size</label>
         <input type="number" id="node-input-streamChunkSize" placeholder="1" style="width: 100px;">
