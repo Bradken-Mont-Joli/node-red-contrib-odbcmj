@@ -12,7 +12,6 @@ module.exports = function (RED) {
         
         this.credentials = RED.nodes.getCredentials(this.id);
 
-        // Cette fonction est maintenant cruciale pour le mode streaming
         this._buildConnectionString = function() {
             if (this.config.connectionMode === 'structured') {
                 if (!this.config.dbType || !this.config.server) {
@@ -119,9 +118,61 @@ module.exports = function (RED) {
     });
 
     RED.httpAdmin.post("/odbc_config/:id/test", RED.auth.needsPermission("odbc.write"), async function(req, res) {
-        // ... (Pas de changement dans cette section)
-    });
+        const tempConfig = req.body;
 
+        const buildTestConnectionString = () => {
+            if (tempConfig.connectionMode === 'structured') {
+                if (!tempConfig.dbType || !tempConfig.server) {
+                    throw new Error("En mode structuré, le type de base de données et le serveur sont requis.");
+                }
+                let driver;
+                let parts = [];
+                switch (tempConfig.dbType) {
+                    case 'sqlserver': driver = 'ODBC Driver 17 for SQL Server'; break;
+                    case 'postgresql': driver = 'PostgreSQL Unicode'; break;
+                    case 'mysql': driver = 'MySQL ODBC 8.0 Unicode Driver'; break;
+                    default: driver = tempConfig.driver || ''; break;
+                }
+                if(driver) parts.unshift(`DRIVER={${driver}}`);
+                parts.push(`SERVER=${tempConfig.server}`);
+                if (tempConfig.database) parts.push(`DATABASE=${tempConfig.database}`);
+                if (tempConfig.user) parts.push(`UID=${tempConfig.user}`);
+                if (tempConfig.password) parts.push(`PWD=${tempConfig.password}`);
+                return parts.join(';');
+            } else {
+                let connStr = tempConfig.connectionString || "";
+                if (!connStr) {
+                    throw new Error("La chaîne de connexion ne peut pas être vide.");
+                }
+                return connStr;
+            }
+        };
+
+        let connection;
+        try {
+            const testConnectionString = buildTestConnectionString();
+            
+            // ==============================================================
+            // LIGNE DE DÉBOGAGE AJOUTÉE
+            // ==============================================================
+            console.log("[ODBC Test] Attempting to connect with string:", testConnectionString);
+            // ==============================================================
+
+            const connectionOptions = {
+                connectionString: testConnectionString,
+                loginTimeout: 10
+            };
+            connection = await odbcModule.connect(connectionOptions);
+            res.sendStatus(200);
+        } catch (err) {
+            console.error("[ODBC Test] Connection failed:", err); // Ajout d'un log d'erreur
+            res.status(500).send(err.message || "Erreur inconnue durant le test.");
+        } finally {
+            if (connection) {
+                await connection.close();
+            }
+        }
+    });
 
     // --- ODBC Query Node ---
     function odbc(config) {
@@ -130,7 +181,6 @@ module.exports = function (RED) {
         this.poolNode = RED.nodes.getNode(this.config.connection);
         this.name = this.config.name;
 
-        // ... (enhanceError et executeQueryAndProcess restent inchangés)
         this.enhanceError = (error, query, params, defaultMessage = "Query error") => {
             const queryContext = (() => {
                 let s = "";
@@ -195,10 +245,10 @@ module.exports = function (RED) {
             if (Object.keys(otherParams).length) { newMsg.odbc = otherParams; }
             return newMsg;
         };
-
+        
         this.executeStreamQuery = async (dbConnection, queryString, queryParams, msg, send) => {
             const chunkSize = parseInt(this.config.streamChunkSize) || 1;
-            const fetchSize = chunkSize > 100 ? 100 : chunkSize; // Optimisation du fetch
+            const fetchSize = chunkSize > 100 ? 100 : chunkSize;
             let cursor;
         
             try {
@@ -252,7 +302,7 @@ module.exports = function (RED) {
             if (!this.poolNode) {
                 return done(new Error("ODBC Config node not properly configured."));
             }
-
+    
             const execute = async (connection) => {
                 this.config.outputObj = this.config.outputObj || "payload";
                 
@@ -265,7 +315,7 @@ module.exports = function (RED) {
                 let query = await new Promise(resolve => RED.util.evaluateNodeProperty(querySource, querySourceType, this, msg, (err, val) => resolve(err ? undefined : (val || this.config.query || ""))));
                 
                 if (!query) throw new Error("No query to execute");
-
+    
                 const isPreparedStatement = params || (query && query.includes("?"));
                 if (!isPreparedStatement && query) {
                     query = mustache.render(query, msg);
@@ -280,7 +330,7 @@ module.exports = function (RED) {
                     send(newMsg);
                 }
             };
-
+    
             let connectionFromPool;
             try {
                 this.status({ fill: "yellow", shape: "dot", text: "connecting..." });
@@ -320,7 +370,7 @@ module.exports = function (RED) {
             this.status({});
             done();
         });
-
+    
         if (this.poolNode) {
             this.status({ fill: "green", shape: "dot", text: "ready" });
         } else {
@@ -328,6 +378,6 @@ module.exports = function (RED) {
             this.warn("ODBC Config node not found or not deployed.");
         }
     }
-
+    
     RED.nodes.registerType("odbc", odbc);
 };

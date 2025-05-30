@@ -71,12 +71,36 @@
 
             $('#node-config-test-connection').on('click', function() {
                 var button = $(this);
+                var connectionMode = $("#node-config-input-connectionMode").val();
+
+                if (connectionMode === 'structured') {
+                    var server = $("#node-config-input-server").val().trim();
+                    if (!server) {
+                        RED.notify("Le champ 'Server' est requis pour le test.", {type: "warning", timeout: 3000});
+                        return;
+                    }
+                } else { 
+                    var connStr = $("#node-config-input-connectionString").val().trim();
+                    if (!connStr) {
+                        RED.notify("La chaîne de connexion est requise pour le test.", {type: "warning", timeout: 3000});
+                        return; 
+                    }
+                    // Nouvelle validation :
+                    // Elle est invalide SEULEMENT si elle ne contient PAS de DSN ET qu'elle ne respecte PAS l'ancien critère pour les chaînes DSN-less.
+                    var isDsnString = /DSN=[^;]+/i.test(connStr);
+                    var isDriverBasedString = /DRIVER=\{.+?\}/i.test(connStr) && /(SERVER|DATABASE|UID|PWD)=/i.test(connStr); // Un peu plus complet
+
+                    if (!isDsnString && !isDriverBasedString) {
+                         RED.notify("La chaîne de connexion semble invalide ou incomplète (ex: DSN=value; ou DRIVER={...};SERVER=...;).", {type: "warning", timeout: 4000});
+                         return;
+                    }
+                }
+
                 var originalText = "Test Connection";
                 var icon = button.find("i");
                 icon.removeClass('fa-bolt').addClass('fa-spinner fa-spin');
                 button.text(' Testing...').prop('disabled', true);
                 
-                var connectionMode = $("#node-config-input-connectionMode").val();
                 var configData = {
                     connectionMode: connectionMode,
                     dbType: $("#node-config-input-dbType").val(),
@@ -272,7 +296,6 @@
             outputObj: { value: "payload" },
             streaming: { value: false },
             streamChunkSize: { value: 1, validate: RED.validators.number() },
-            // Nouveaux `defaults` pour les Typed Inputs
             querySource: { value: "query", required: false },
             querySourceType: { value: "msg", required: false },
             paramsSource: { value: "parameters", required: false },
@@ -295,7 +318,6 @@
                 $(".stream-options").toggle(this.checked);
             }).trigger("change");
 
-            // Initialisation des Typed Inputs
             $("#node-input-querySource").typedInput({
                 default: 'msg',
                 typeField: "#node-input-querySourceType",
@@ -414,7 +436,7 @@ Executes a query against a configured ODBC data source.
 ### Properties
 
 - **Connection**: The `odbc config` node to use.
-- **Query (fallback)**: A static SQL query to run if the "Query Source" does not provide one. Can contain Mustache syntax (e.g., `{{{payload.id}}}`).
+- **Query (fallback)**: A static SQL query to run if the "Query (fallback)" does not provide one. Can contain Mustache syntax (e.g., `{{{payload.id}}}`).
 - **Result to**: The `msg` property where the query result will be stored. Default: `payload`.
 
 ### Streaming Results
@@ -425,10 +447,18 @@ For queries that return a large number of rows, streaming prevents high memory u
 - **`Chunk Size`**: The number of rows to include in each output message. A value of `1` means one message will be sent for every single row.
 
 #### Streaming Output Format
-When streaming is active, each output message will contain:
-- A payload (or the configured output property) containing an array of rows for the current chunk.
-- A `msg.odbc_stream` object with metadata for tracking progress:
-    - `index`: The starting index of the current chunk (e.g., 0, 100, 200...).
-    - `count`: The number of rows in the current chunk.
-    - `complete`: A boolean that is `true` only on the very last message of the stream, useful for triggering a final action.  The last payload will always be an empty array.
+When streaming is active, the node sends messages in sequence:
+
+1.  **Data Messages**: One or more messages where the payload (or the configured output property) contains an array of rows for the current chunk. For these messages, `msg.odbc_stream.complete` will be **`false`**.
+
+2.  **Completion Message**: A single, final message indicating the end of the stream. For this message:
+    -   The payload will be an **empty array `[]`**.
+    -   `msg.odbc_stream.complete` will be **`true`**.
+
+The `msg.odbc_stream` object contains metadata for tracking:
+-   `index`: The starting index of the current chunk. For the completion message, this will be the total number of rows processed.
+-   `count`: The number of rows in the chunk. This will be `0` for the completion message.
+-   `complete`: The boolean flag (`true`/`false`).
+
+This pattern ensures you can reliably trigger a final action (like closing a file or calculating an aggregate) only when the message with `complete: true` is received.
 </script>
