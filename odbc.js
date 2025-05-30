@@ -120,14 +120,18 @@ module.exports = function (RED) {
         }
     });
 
+    // --- API ENDPOINT POUR LE BOUTON DE TEST (VERSION CORRIGÉE) ---
     RED.httpAdmin.post("/odbc_config/:id/test", RED.auth.needsPermission("odbc.write"), async function(req, res) {
         const tempConfig = req.body;
-        const tempCredentials = { password: tempConfig.password };
-        delete tempConfig.password;
 
+        // Cette fonction interne ne doit PAS interagir avec `res`.
+        // Elle retourne une chaîne ou lance une erreur.
         const buildTestConnectionString = () => {
-             if (tempConfig.connectionMode === 'structured') {
-                if (!tempConfig.dbType || !tempConfig.server) return res.status(400).send("Mode structuré : le type de BD et le serveur sont requis.");
+            if (tempConfig.connectionMode === 'structured') {
+                if (!tempConfig.dbType || !tempConfig.server) {
+                    // On lance une erreur au lieu d'envoyer une réponse.
+                    throw new Error("En mode structuré, le type de base de données et le serveur sont requis.");
+                }
                 let driver;
                 let parts = [];
                 switch (tempConfig.dbType) {
@@ -137,15 +141,19 @@ module.exports = function (RED) {
                     default: driver = tempConfig.driver || ''; break;
                 }
                 if(driver) parts.unshift(`DRIVER={${driver}}`);
-                parts.push(`SERVER=${tempConfig.server}`);
+                if (tempConfig.server) parts.push(`SERVER=${tempConfig.server}`);
                 if (tempConfig.database) parts.push(`DATABASE=${tempConfig.database}`);
                 if (tempConfig.user) parts.push(`UID=${tempConfig.user}`);
-                if (tempCredentials.password) parts.push(`PWD=${tempCredentials.password}`);
+                // Le mot de passe est géré dans le bloc try/catch principal
+                if (tempConfig.password) parts.push(`PWD=${tempConfig.password}`);
+
                 return parts.join(';');
-            } else {
+
+            } else { // 'string' mode
                 let connStr = tempConfig.connectionString || "";
-                if (tempCredentials.password && connStr.includes('{{{password}}}')) {
-                    connStr = connStr.replace('{{{password}}}', tempCredentials.password);
+                // Le mot de passe est supposé être dans la chaîne ici
+                if (!connStr) {
+                    throw new Error("La chaîne de connexion ne peut pas être vide.");
                 }
                 return connStr;
             }
@@ -153,14 +161,19 @@ module.exports = function (RED) {
 
         let connection;
         try {
+            // Le bloc try/catch gère maintenant TOUTES les erreurs.
             const testConnectionString = buildTestConnectionString();
-            if (!testConnectionString) return res.status(400).send("La chaîne de connexion est vide.");
+            
             connection = await odbcModule.connect(testConnectionString);
-            res.sendStatus(200);
+            res.sendStatus(200); // Succès, on envoie la seule et unique réponse.
+
         } catch (err) {
+            // Qu'il s'agisse d'une erreur de validation ou de connexion, on l'attrape ici.
             res.status(500).send(err.message || "Erreur inconnue durant le test.");
         } finally {
-            if (connection) await connection.close();
+            if (connection) {
+                await connection.close();
+            }
         }
     });
 

@@ -1,6 +1,6 @@
 {
   "name": "@bkmj/node-red-contrib-odbcmj",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "A powerful Node-RED node to connect to any ODBC data source, with connection pooling, advanced retry logic, and result streaming.",
   "keywords": [
     "node-red",
