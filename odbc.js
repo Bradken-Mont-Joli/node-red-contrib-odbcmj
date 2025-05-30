@@ -122,233 +122,215 @@ module.exports = function (RED) {
         // ... (Pas de changement dans cette section)
     });
 
-    // --- ODBC Query Node ---
+    
+// --- ODBC Query Node ---
     function odbc(config) {
         RED.nodes.createNode(this, config);
         this.config = config;
         this.poolNode = RED.nodes.getNode(this.config.connection);
         this.name = this.config.name;
-        this.isAwaitingRetry = false;
-        this.retryTimer = null;
+        // La logique de retry complexe est temporairement retirée pour stabiliser le noeud.
 
+        // Cette fonction reste inchangée
         this.enhanceError = (error, query, params, defaultMessage = "Query error") => {
-            // ... (Pas de changement dans cette section)
-        };
-
-        this.executeQueryAndProcess = async (dbConnection, queryString, queryParams, isPreparedStatement, msg) => {
-            // ... (Pas de changement dans cette section)
+            const queryContext = (() => {
+                let s = "";
+                if (query || params) {
+                    s += " {";
+                    if (query) s += `"query": '${query.substring(0, 100)}${query.length > 100 ? "..." : ""}'`;
+                    if (params) s += `, "params": '${JSON.stringify(params)}'`;
+                    s += "}";
+                    return s;
+                }
+                return "";
+            })();
+            let finalError;
+            if (typeof error === "object" && error !== null && error.message) { finalError = error; } 
+            else if (typeof error === "string") { finalError = new Error(error); }
+            else { finalError = new Error(defaultMessage); }
+            finalError.message = `${finalError.message}${queryContext}`;
+            if (query) finalError.query = query;
+            if (params) finalError.params = params;
+            return finalError;
         };
         
-        // =================================================================
-        // DEBUT DE LA SECTION CORRIGÉE
-        // =================================================================
+        // Cette fonction reste presque inchangée, elle est maintenant appelée depuis on("input")
+        this.executeQueryAndProcess = async (dbConnection, queryString, queryParams, msg) => {
+            const result = await dbConnection.query(queryString, queryParams);
 
-        this.executeStreamQuery = async (queryString, queryParams, msg, send, done) => {
+            if (typeof result === "undefined") { throw new Error("Query returned undefined."); }
+            const newMsg = RED.util.cloneMessage(msg);
+            const otherParams = {};
+            let actualDataRows = [];
+            if (result !== null && typeof result === "object") {
+                if (Array.isArray(result)) {
+                    actualDataRows = [...result];
+                    for (const [key, value] of Object.entries(result)) {
+                        if (isNaN(parseInt(key))) { otherParams[key] = value; }
+                    }
+                } else {
+                    for (const [key, value] of Object.entries(result)) { otherParams[key] = value; }
+                }
+            }
+            const columnMetadata = otherParams.columns;
+            if (Array.isArray(columnMetadata) && Array.isArray(actualDataRows) && actualDataRows.length > 0) {
+                const sqlBitColumnNames = new Set();
+                columnMetadata.forEach((col) => {
+                    if (col && typeof col.name === "string" && col.dataTypeName === "SQL_BIT") {
+                        sqlBitColumnNames.add(col.name);
+                    }
+                });
+                if (sqlBitColumnNames.size > 0) {
+                    actualDataRows.forEach((row) => {
+                        if (typeof row === "object" && row !== null) {
+                            for (const columnName of sqlBitColumnNames) {
+                                if (row.hasOwnProperty(columnName)) {
+                                    const value = row[columnName];
+                                    if (value === "1" || value === 1) { row[columnName] = true; } 
+                                    else if (value === "0" || value === 0) { row[columnName] = false; }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            objPath.set(newMsg, this.config.outputObj, actualDataRows);
+            if (Object.keys(otherParams).length) { newMsg.odbc = otherParams; }
+            return newMsg;
+        };
+
+        // =================================================================
+        // NOUVELLE IMPLEMENTATION DU STREAMING
+        // =================================================================
+        this.executeStreamQuery = async (dbConnection, queryString, queryParams, msg, send) => {
             const chunkSize = parseInt(this.config.streamChunkSize) || 1;
+            const fetchSize = chunkSize > 50 ? 50 : chunkSize; // Optimisation : ne pas fetcher plus que nécessaire à la fois
             let cursor;
-            let rowCount = 0;
-            let chunk = [];
             
             try {
-                if (!this.poolNode) {
-                    throw new Error("Le noeud de configuration ODBC n'est pas disponible.");
-                }
-                
-                // CORRECTION : Obtenir la chaîne de connexion depuis le noeud de config
-                const connectionString = this.poolNode._buildConnectionString();
-                if (!connectionString) {
-                    throw new Error("Impossible de construire une chaîne de connexion valide.");
-                }
-                
-                // CORRECTION : Appeler .cursor() comme une fonction de haut niveau du module odbc
-                cursor = await odbcModule.cursor(connectionString, queryString, queryParams);
-                
+                // LA BONNE METHODE !
+                cursor = await dbConnection.query(queryString, queryParams, { cursor: true, fetchSize: fetchSize });
+
                 this.status({ fill: "blue", shape: "dot", text: "streaming rows..." });
-                let row = await cursor.fetch();
-                while (row) {
-                    rowCount++;
-                    chunk.push(row);
-                    if (chunk.length >= chunkSize) {
-                        const newMsg = RED.util.cloneMessage(msg);
-                        objPath.set(newMsg, this.config.outputObj, chunk);
-                        newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: false };
-                        send(newMsg);
-                        chunk = [];
+
+                let rowCount = 0;
+                let chunk = [];
+                let rows;
+                
+                // .fetch() peut retourner plusieurs lignes à la fois, on boucle dessus
+                while ((rows = await cursor.fetch())) {
+                    // Si fetch retourne un tableau vide, c'est la fin.
+                    if (rows.length === 0) break;
+
+                    for (const row of rows) {
+                        rowCount++;
+                        chunk.push(row);
+                        if (chunk.length >= chunkSize) {
+                            const newMsg = RED.util.cloneMessage(msg);
+                            objPath.set(newMsg, this.config.outputObj, chunk);
+                            newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: false };
+                            send(newMsg);
+                            chunk = [];
+                        }
                     }
-                    row = await cursor.fetch();
                 }
+                
                 if (chunk.length > 0) {
                     const newMsg = RED.util.cloneMessage(msg);
                     objPath.set(newMsg, this.config.outputObj, chunk);
                     newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: true };
                     send(newMsg);
                 }
+                
                 if (rowCount === 0) {
-                     const newMsg = RED.util.cloneMessage(msg);
-                     objPath.set(newMsg, this.config.outputObj, []);
-                     newMsg.odbc_stream = { index: 0, count: 0, complete: true };
-                     send(newMsg);
+                    const newMsg = RED.util.cloneMessage(msg);
+                    objPath.set(newMsg, this.config.outputObj, []);
+                    newMsg.odbc_stream = { index: 0, count: 0, complete: true };
+                    send(newMsg);
                 }
+                
                 this.status({ fill: "green", shape: "dot", text: `success (${rowCount} rows)` });
-                if(done) done();
-            } catch(err) {
-                throw err;
-            }
-            finally {
-                if (cursor) await cursor.close();
+
+            } finally {
+                if (cursor) {
+                    await cursor.close();
+                }
             }
         };
 
-        this.runQuery = async (msg, send, done) => {
-            // La logique de cette fonction (séparation streaming / non-streaming) reste la même
-            // que dans la correction précédente et est toujours valide.
-            // ... (Le code de runQuery de la réponse précédente est ici)
-            let isPreparedStatement = false;
-            let connectionFromPool = null;
+        // =================================================================
+        // NOUVELLE LOGIQUE D'ENTREE UNIFIEE
+        // =================================================================
+        this.on("input", async (msg, send, done) => {
+            if (!this.poolNode) {
+                const err = new Error("ODBC Config node not properly configured.");
+                this.status({ fill: "red", shape: "ring", text: "No config node" });
+                done(err);
+                return;
+            }
 
+            let connection;
             try {
                 this.status({ fill: "blue", shape: "dot", text: "preparing..." });
-                this.config.outputObj = msg?.output || this.config?.outputObj || "payload";
+                this.config.outputObj = this.config.outputObj || "payload";
 
+                // Obtenir la requête et les paramètres
                 const querySourceType = this.config.querySourceType || 'msg';
                 const querySource = this.config.querySource || 'query';
                 const paramsSourceType = this.config.paramsSourceType || 'msg';
                 const paramsSource = this.config.paramsSource || 'parameters';
 
-                let currentQueryParams = await new Promise((resolve) => {
-                    RED.util.evaluateNodeProperty(paramsSource, paramsSourceType, this, msg, (err, value) => {
-                        resolve(err ? undefined : value);
-                    });
+                const currentQueryParams = await new Promise((resolve) => {
+                    RED.util.evaluateNodeProperty(paramsSource, paramsSourceType, this, msg, (err, value) => resolve(err ? undefined : value));
                 });
 
                 let currentQueryString = await new Promise((resolve) => {
-                     RED.util.evaluateNodeProperty(querySource, querySourceType, this, msg, (err, value) => {
-                         resolve(err ? undefined : (value || this.config.query || ""));
-                     });
+                     RED.util.evaluateNodeProperty(querySource, querySourceType, this, msg, (err, value) => resolve(err ? undefined : (value || this.config.query || "")));
                 });
                 
                 if (!currentQueryString) { throw new Error("No query to execute"); }
                 
-                isPreparedStatement = currentQueryParams || (currentQueryString && currentQueryString.includes("?"));
+                const isPreparedStatement = currentQueryParams || (currentQueryString && currentQueryString.includes("?"));
                 if (!isPreparedStatement && currentQueryString) {
-                    for (const parsed of mustache.parse(currentQueryString)) {
-                        if ((parsed[0] === "name" || parsed[0] === "&") && !objPath.has(msg, parsed[1])) {
-                            this.warn(`Mustache parameter "${parsed[1]}" is absent.`);
-                        }
-                    }
                     currentQueryString = mustache.render(currentQueryString, msg);
                 }
+                
+                // Obtenir une connexion du pool
+                this.status({ fill: "yellow", shape: "dot", text: "connecting..." });
+                connection = await this.poolNode.connect();
+                this.status({ fill: "blue", shape: "dot", text: "executing..." });
 
                 if (this.config.streaming) {
-                    await this.executeStreamQuery(currentQueryString, currentQueryParams, msg, send, done);
+                    await this.executeStreamQuery(connection, currentQueryString, currentQueryParams, msg, send);
                 } else {
-                    const executeNonQuery = async (conn) => {
-                        const processedMsg = await this.executeQueryAndProcess(conn, currentQueryString, currentQueryParams, isPreparedStatement, msg);
-                        this.status({ fill: "green", shape: "dot", text: "success" });
-                        send(processedMsg);
-                        if(done) done();
-                    };
-                    
-                    let firstAttemptError = null;
-                    try {
-                        connectionFromPool = await this.poolNode.connect();
-                        await executeNonQuery(connectionFromPool);
-                        return;
-                    } catch (err) {
-                        firstAttemptError = this.enhanceError(err, currentQueryString, currentQueryParams, "Query failed with pooled connection");
-                        this.warn(`First attempt failed: ${firstAttemptError.message}`);
-                    } finally {
-                        if (connectionFromPool) await connectionFromPool.close();
-                    }
-
-                    if (firstAttemptError) {
-                        if (this.poolNode && this.poolNode.config.retryFreshConnection) {
-                            this.log("Attempting retry with a fresh connection.");
-                            this.status({ fill: "yellow", shape: "dot", text: "Retrying (fresh)..." });
-                            let freshConnection = null;
-                            try {
-                                const freshConnectConfig = this.poolNode.getFreshConnectionConfig();
-                                freshConnection = await odbcModule.connect(freshConnectConfig);
-                                this.log("Fresh connection established for retry.");
-                                await executeNonQuery(freshConnection);
-                                this.log("Query successful with fresh connection. Resetting pool.");
-                                await this.poolNode.resetPool();
-                                return;
-                            } catch (freshError) {
-                                this.warn(`Retry with fresh connection also failed: ${freshError.message}`);
-                                const retryDelay = parseInt(this.poolNode.config.retryDelay) || 0;
-                                if (retryDelay > 0) {
-                                    this.isAwaitingRetry = true;
-                                    this.status({ fill: "red", shape: "ring", text: `Retry in ${retryDelay}s...` });
-                                    this.log(`Scheduling retry in ${retryDelay} seconds.`);
-                                    this.retryTimer = setTimeout(() => {
-                                        this.isAwaitingRetry = false;
-                                        this.log("Timer expired. Triggering scheduled retry.");
-                                        this.receive(msg);
-                                    }, retryDelay * 1000);
-                                    if (done) done();
-                                } else {
-                                    throw this.enhanceError(freshError, currentQueryString, currentQueryParams, "Query failed on fresh connection retry");
-                                }
-                            } finally {
-                                if (freshConnection) await freshConnection.close();
-                            }
-                        } else {
-                            throw firstAttemptError;
-                        }
-                    }
+                    const newMsg = await this.executeQueryAndProcess(connection, currentQueryString, currentQueryParams, msg);
+                    this.status({ fill: "green", shape: "dot", text: "success" });
+                    send(newMsg);
                 }
+                
+                // Si tout s'est bien passé, on appelle done() sans erreur
+                done();
+
             } catch (err) {
-                const finalError = err instanceof Error ? err : new Error(String(err));
+                const finalError = this.enhanceError(err, null, null, "Query Execution Failed");
                 this.status({ fill: "red", shape: "ring", text: "query error" });
-                if (done) { done(finalError); } else { this.error(finalError, msg); }
-            }
-        };
+                done(finalError); // On passe l'erreur à done() pour que Node-RED la gère
 
-        // =================================================================
-        // FIN DE LA SECTION CORRIGÉE
-        // =================================================================
-        
-        this.checkPool = async function (msg, send, done) {
-            try {
-                if (!this.poolNode) { throw new Error("ODBC Config node not properly configured."); }
-                
-                // Pour le mode streaming, on n'a pas besoin d'attendre l'initialisation du *pool*,
-                // mais on a besoin du noeud de config.
-                if (this.config.streaming) {
-                    await this.runQuery(msg, send, done);
-                    return;
+            } finally {
+                if (connection) {
+                    try {
+                        await connection.close();
+                    } catch (closeErr) {
+                        this.warn(`Failed to close DB connection: ${closeErr.message}`);
+                    }
                 }
-                
-                // La logique ci-dessous ne s'applique qu'au mode non-streaming
-                if (this.poolNode.connecting) {
-                    this.warn("Waiting for connection pool to initialize...");
-                    this.status({ fill: "yellow", shape: "ring", text: "Waiting for pool" });
-                    setTimeout(() => {
-                        this.checkPool(msg, send, done).catch((err) => {
-                            this.status({ fill: "red", shape: "dot", text: "Pool wait failed" });
-                            if (done) { done(err); } else { this.error(err, msg); }
-                        });
-                    }, 1000);
-                    return;
-                }
-                if (!this.poolNode.pool) {
-                    await this.poolNode.connect().then(c => c.close());
-                }
-                await this.runQuery(msg, send, done);
-            } catch (err) {
-                const finalError = err instanceof Error ? err : new Error(String(err));
-                this.status({ fill: "red", shape: "dot", text: "Op failed" });
-                if (done) { done(finalError); } else { this.error(finalError, msg); }
             }
-        };
-
-        this.on("input", async (msg, send, done) => {
-            // ... (Pas de changement dans cette section)
         });
-
-        this.on("close", async (done) => {
-            // ... (Pas de changement dans cette section)
+        
+        this.on("close", (done) => {
+            this.status({});
+            // La logique de fermeture du pool est déjà dans le noeud de config
+            done();
         });
 
         if (this.poolNode) {

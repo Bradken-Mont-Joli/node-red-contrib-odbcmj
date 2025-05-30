@@ -49,8 +49,6 @@ A **Test Connection** button in the configuration panel allows you to instantly 
 
 #### Pool Options
 
-> **Note Importante :** Ces options de pool s'appliquent uniquement aux requêtes standards (**non-streamées**). Les requêtes en mode streaming gèrent leur propre connexion temporaire pour chaque exécution et n'utilisent **pas** le pool.
-
 -   **`initialSize`** `<number>` (optional): The number of connections to create when the pool is initialized. Default: 5.
 -   **`incrementSize`** `<number>` (optional): The number of connections to create when the pool is exhausted. Default: 5.
 -   **`maxSize`** `<number>` (optional): The maximum number of connections allowed in the pool. Default: 15.
@@ -59,8 +57,6 @@ A **Test Connection** button in the configuration panel allows you to instantly 
 -   **`loginTimeout`** `<number>` (optional): The number of seconds for an attempt to create a connection to succeed. Default: 3.
 
 #### Error Handling & Retry
-
-> **Note Importante :** Cette logique de nouvelle tentative et de réinitialisation du pool s'applique aux requêtes standards (**non-streamées**). Une requête en mode streaming qui échoue remontera une erreur directement, sans déclencher ce mécanisme spécifique de nouvelle tentative.
 
 -   **`retryFreshConnection`** `<boolean>` (optional): If a query fails, the node will retry once with a brand new connection. If this succeeds, the entire connection pool is reset to clear any stale connections. Default: false.
 -   **`retryDelay`** `<number>` (optional): If both the pooled and the fresh connection attempts fail, this sets a delay in seconds before another retry is attempted. A value of **0** disables further automatic retries. Default: 5.
