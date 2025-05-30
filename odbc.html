@@ -31,15 +31,13 @@
         oneditprepare: function () {
             var node = this;
 
-            // --- Logique pour les sections déroulantes ---
-            // On ajoute un écouteur de clic sur les en-têtes de section
+            // Logique pour les sections déroulantes
             $('.form-section-header').on('click', function() {
                 $(this).toggleClass('expanded');
-                // On fait basculer le conteneur d'options qui suit immédiatement l'en-tête
                 $(this).next('.form-section-content').slideToggle();
             });
 
-            // --- Logique pour le mode de connexion hybride ---
+            // Logique pour le mode de connexion hybride
             function toggleConnectionMode(mode) {
                 if (mode === 'structured') {
                     $(".config-mode-structured").show();
@@ -65,7 +63,7 @@
                 toggleDriverField($(this).val());
             }).trigger("change");
 
-            // --- Logiques pour les cases à cocher ---
+            // Logiques pour les cases à cocher
             $("#node-config-input-syntaxtick").on("change", function () {
                 $(".input-syntax").toggle(this.checked);
             }).trigger("change");
@@ -74,7 +72,7 @@
                 $(".retry-options").toggle(this.checked);
             }).trigger("change");
 
-            // --- Logique pour le bouton de test ---
+            // Logique pour le bouton de test
             $('#node-config-test-connection').on('click', function() {
                 var button = $(this);
                 var originalText = "Test Connection";
@@ -84,11 +82,6 @@
                 
                 var connectionMode = $("#node-config-input-connectionMode").val();
                 
-                // --- CORRECTION : Récupérer le bon mot de passe selon le mode ---
-                var password = (connectionMode === 'structured') 
-                    ? $("#node-config-input-password-structured").val() 
-                    : $("#node-config-input-password-string").val();
-
                 var configData = {
                     connectionMode: connectionMode,
                     dbType: $("#node-config-input-dbType").val(),
@@ -96,8 +89,9 @@
                     server: $("#node-config-input-server").val(),
                     database: $("#node-config-input-database").val(),
                     user: $("#node-config-input-user").val(),
-                    password: password,
-                    connectionString: $("#node-config-input-connectionString").val()
+                    connectionString: $("#node-config-input-connectionString").val(),
+                    // Le mot de passe n'est envoyé que si on est en mode structuré
+                    password: (connectionMode === 'structured') ? $("#node-config-input-password").val() : null
                 };
 
                 $.ajax({
@@ -128,6 +122,7 @@
         padding: 5px;
         border-bottom: 1px solid #ddd;
         margin-bottom: 10px;
+        user-select: none;
     }
     .form-section-header i.fa-caret-right {
         transition: transform 0.2s ease-in-out;
@@ -181,20 +176,15 @@
             <input type="text" id="node-config-input-user">
         </div>
         <div class="form-row">
-            <label for="node-config-input-password-structured"><i class="fa fa-lock"></i> Password</label>
-            <input type="password" id="node-config-input-password-structured">
+            <label for="node-config-input-password"><i class="fa fa-lock"></i> Password</label>
+            <input type="password" id="node-config-input-password">
         </div>
     </div>
     
     <div class="config-mode-string">
         <div class="form-row">
             <label for="node-config-input-connectionString"><i class="fa fa-font"></i> Connection String</label>
-            <input type="text" id="node-config-input-connectionString" placeholder="DRIVER={...};PWD={{{password}}};">
-        </div>
-        <div class="form-row">
-            <label for="node-config-input-password-string"><i class="fa fa-lock"></i> Password</label>
-            <input type="password" id="node-config-input-password-string">
-            <span class="form-tips">Use <code>{{{password}}}</code> placeholder in the string above.</span>
+            <input type="text" id="node-config-input-connectionString" placeholder="DRIVER={...};SERVER=...;UID=...;PWD=...;">
         </div>
     </div>
 
@@ -205,8 +195,8 @@
 
     <hr/>
     
-    <div class="form-section-header expanded"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-sitemap"></i> Pool Options</h4></div>
-    <div class="form-section-content">
+    <div class="form-section-header"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-sitemap"></i> Pool Options</h4></div>
+    <div class="form-section-content" style="display: none;">
         <div class="form-row">
             <label for="node-config-input-initialSize"><i class="fa fa-play"></i> Initial Size</label>
             <input type="number" id="node-config-input-initialSize" placeholder="5" />
@@ -235,8 +225,8 @@
         </div>
     </div>
     
-    <div class="form-section-header expanded"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-exclamation-triangle"></i> Error Handling & Retry</h4></div>
-    <div class="form-section-content">
+    <div class="form-section-header"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-exclamation-triangle"></i> Error Handling & Retry</h4></div>
+    <div class="form-section-content" style="display: none;">
         <div class="form-row">
             <label for="node-config-input-retryFreshConnection" style="width: auto;"><i class="fa fa-refresh"></i> Retry with fresh connection</label>
             <input type="checkbox" id="node-config-input-retryFreshConnection" style="display: inline-block; width: auto; vertical-align: top;" />
@@ -277,10 +267,9 @@
     </div>
 </script>
 
-
 <script type="text/javascript">
     RED.nodes.registerType("odbc", {
-        category: "storage-input",
+        category: "storage",
         color: "#89A5C0",
         defaults: {
             name: { value: "" },
