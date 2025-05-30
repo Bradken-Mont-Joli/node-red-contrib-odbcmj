@@ -387,13 +387,17 @@ This mode gives you full control for complex or non-standard connection strings.
 A **Test Connection** button in the configuration panel allows you to instantly verify your settings without deploying the flow.
 
 ### Pool Options
+> **Important Note:** These pool options only apply to standard (non-streaming) queries. Streaming queries manage their own temporary connection for each execution and do **not** use the connection pool.
+
 - **`initialSize`**: The number of connections to create when the pool is initialized. Default: 5.
 - **`maxSize`**: The maximum number of connections allowed in the pool. Default: 15.
 - (See `odbc` package documentation for more details on pool options).
 
 ### Error Handling & Retry
+> **Important Note:** This retry logic applies to standard (non-streaming) queries. A streaming query that fails will report an error directly, without triggering this specific retry mechanism.
+
 - **`retryFreshConnection`**: If a query fails, the node will retry once with a brand new connection. If this succeeds, the entire connection pool is reset to clear any stale connections.
-- **`retryDelay`**: If both attempts fail, this sets a delay in seconds before another retry is attempted. A value of **0** disables further automatic retries.
+- **`retryDelay`**`: If both attempts fail, this sets a delay in seconds before another retry is attempted. A value of **0** disables further automatic retries.
 - **`retryOnMsg`**: If the node is waiting for a timed retry, a new incoming message can override the timer and trigger an immediate retry.
 
 ### Advanced
