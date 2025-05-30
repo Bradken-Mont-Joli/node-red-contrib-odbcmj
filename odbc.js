@@ -122,7 +122,7 @@ module.exports = function (RED) {
         // ... (Pas de changement dans cette section)
     });
 
-    
+
 // --- ODBC Query Node ---
     function odbc(config) {
         RED.nodes.createNode(this, config);
@@ -203,60 +203,67 @@ module.exports = function (RED) {
         // NOUVELLE IMPLEMENTATION DU STREAMING
         // =================================================================
         this.executeStreamQuery = async (dbConnection, queryString, queryParams, msg, send) => {
-            const chunkSize = parseInt(this.config.streamChunkSize) || 1;
-            const fetchSize = chunkSize > 50 ? 50 : chunkSize; // Optimisation : ne pas fetcher plus que nécessaire à la fois
-            let cursor;
-            
-            try {
-                // LA BONNE METHODE !
-                cursor = await dbConnection.query(queryString, queryParams, { cursor: true, fetchSize: fetchSize });
+        const chunkSize = parseInt(this.config.streamChunkSize) || 1;
+        // La taille du fetch peut être optimisée, mais restons simple pour la clarté.
+        const fetchSize = chunkSize > 50 ? 50 : chunkSize;
+        let cursor;
 
-                this.status({ fill: "blue", shape: "dot", text: "streaming rows..." });
+        try {
+            cursor = await dbConnection.query(queryString, queryParams, { cursor: true, fetchSize: fetchSize });
+            this.status({ fill: "blue", shape: "dot", text: "streaming rows..." });
 
-                let rowCount = 0;
-                let chunk = [];
-                let rows;
-                
-                // .fetch() peut retourner plusieurs lignes à la fois, on boucle dessus
-                while ((rows = await cursor.fetch())) {
-                    // Si fetch retourne un tableau vide, c'est la fin.
-                    if (rows.length === 0) break;
+            let rowCount = 0;
+            let chunk = [];
 
-                    for (const row of rows) {
-                        rowCount++;
-                        chunk.push(row);
-                        if (chunk.length >= chunkSize) {
-                            const newMsg = RED.util.cloneMessage(msg);
-                            objPath.set(newMsg, this.config.outputObj, chunk);
-                            newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: false };
-                            send(newMsg);
-                            chunk = [];
-                        }
+            // Boucle infinie qui sera rompue de l'intérieur
+            while (true) {
+                const rows = await cursor.fetch();
+
+                // 1. VÉRIFIER D'ABORD LA FIN DU FLUX
+                if (!rows || rows.length === 0) {
+                    // Le flux de la base de données est terminé.
+                    // Le contenu actuel de `chunk` est le tout dernier lot.
+                    if (chunk.length > 0) {
+                        const newMsg = RED.util.cloneMessage(msg);
+                        objPath.set(newMsg, this.config.outputObj, chunk);
+                        // C'est le message final, donc `complete` est TRUE.
+                        newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: true };
+                        send(newMsg);
+                    } else if (rowCount === 0) {
+                        // Gérer le cas où la requête ne retourne aucune ligne.
+                        const newMsg = RED.util.cloneMessage(msg);
+                        objPath.set(newMsg, this.config.outputObj, []);
+                        newMsg.odbc_stream = { index: 0, count: 0, complete: true };
+                        send(newMsg);
+                    }
+                    // Quitter la boucle car il n'y a plus rien à faire.
+                    break;
+                }
+
+                // 2. S'IL Y A DES LIGNES, LES TRAITER
+                for (const row of rows) {
+                    rowCount++;
+                    chunk.push(row);
+                    if (chunk.length >= chunkSize) {
+                        const newMsg = RED.util.cloneMessage(msg);
+                        objPath.set(newMsg, this.config.outputObj, chunk);
+                        // Ce lot n'est pas le dernier, donc `complete` est FALSE.
+                        newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: false };
+                        send(newMsg);
+                        // Vider le lot pour le prochain remplissage.
+                        chunk = [];
                     }
                 }
-                
-                if (chunk.length > 0) {
-                    const newMsg = RED.util.cloneMessage(msg);
-                    objPath.set(newMsg, this.config.outputObj, chunk);
-                    newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: true };
-                    send(newMsg);
-                }
-                
-                if (rowCount === 0) {
-                    const newMsg = RED.util.cloneMessage(msg);
-                    objPath.set(newMsg, this.config.outputObj, []);
-                    newMsg.odbc_stream = { index: 0, count: 0, complete: true };
-                    send(newMsg);
-                }
-                
-                this.status({ fill: "green", shape: "dot", text: `success (${rowCount} rows)` });
+            } // Fin de la boucle while
 
-            } finally {
-                if (cursor) {
-                    await cursor.close();
-                }
+            this.status({ fill: "green", shape: "dot", text: `success (${rowCount} rows)` });
+
+        } finally {
+            if (cursor) {
+                await cursor.close();
             }
-        };
+        }
+    };
 
         // =================================================================
         // NOUVELLE LOGIQUE D'ENTREE UNIFIEE
