@@ -1,7 +1,7 @@
 module.exports = function (RED) {
     const odbcModule = require("odbc");
-    const mustache = require("mustache"); // Utilisé dans runQuery
-    const objPath = require("object-path"); // Utilisé pour mustache et le positionnement du résultat
+    const mustache = require("mustache");
+    const objPath = require("object-path");
 
     // --- ODBC Configuration Node ---
     function poolConfig(config) {
@@ -33,9 +33,6 @@ module.exports = function (RED) {
                 return parts.join(';');
             } else {
                 let connStr = this.config.connectionString || "";
-                if (this.credentials && this.credentials.password && connStr.includes('{{{password}}}')) {
-                    connStr = connStr.replace('{{{password}}}', this.credentials.password);
-                }
                 return connStr;
             }
         };
@@ -120,16 +117,12 @@ module.exports = function (RED) {
         }
     });
 
-    // --- API ENDPOINT POUR LE BOUTON DE TEST (VERSION CORRIGÉE) ---
     RED.httpAdmin.post("/odbc_config/:id/test", RED.auth.needsPermission("odbc.write"), async function(req, res) {
         const tempConfig = req.body;
 
-        // Cette fonction interne ne doit PAS interagir avec `res`.
-        // Elle retourne une chaîne ou lance une erreur.
         const buildTestConnectionString = () => {
             if (tempConfig.connectionMode === 'structured') {
                 if (!tempConfig.dbType || !tempConfig.server) {
-                    // On lance une erreur au lieu d'envoyer une réponse.
                     throw new Error("En mode structuré, le type de base de données et le serveur sont requis.");
                 }
                 let driver;
@@ -141,17 +134,13 @@ module.exports = function (RED) {
                     default: driver = tempConfig.driver || ''; break;
                 }
                 if(driver) parts.unshift(`DRIVER={${driver}}`);
-                if (tempConfig.server) parts.push(`SERVER=${tempConfig.server}`);
+                parts.push(`SERVER=${tempConfig.server}`);
                 if (tempConfig.database) parts.push(`DATABASE=${tempConfig.database}`);
                 if (tempConfig.user) parts.push(`UID=${tempConfig.user}`);
-                // Le mot de passe est géré dans le bloc try/catch principal
                 if (tempConfig.password) parts.push(`PWD=${tempConfig.password}`);
-
                 return parts.join(';');
-
-            } else { // 'string' mode
+            } else {
                 let connStr = tempConfig.connectionString || "";
-                // Le mot de passe est supposé être dans la chaîne ici
                 if (!connStr) {
                     throw new Error("La chaîne de connexion ne peut pas être vide.");
                 }
@@ -161,14 +150,10 @@ module.exports = function (RED) {
 
         let connection;
         try {
-            // Le bloc try/catch gère maintenant TOUTES les erreurs.
             const testConnectionString = buildTestConnectionString();
-            
             connection = await odbcModule.connect(testConnectionString);
-            res.sendStatus(200); // Succès, on envoie la seule et unique réponse.
-
+            res.sendStatus(200);
         } catch (err) {
-            // Qu'il s'agisse d'une erreur de validation ou de connexion, on l'attrape ici.
             res.status(500).send(err.message || "Erreur inconnue durant le test.");
         } finally {
             if (connection) {
@@ -317,8 +302,6 @@ module.exports = function (RED) {
         };
 
         this.runQuery = async (msg, send, done) => {
-             let currentQueryString = this.config.query || "";
-             let currentQueryParams = msg.parameters;
              let isPreparedStatement = false;
              let connectionFromPool = null;
 
@@ -326,6 +309,27 @@ module.exports = function (RED) {
                 this.status({ fill: "blue", shape: "dot", text: "preparing..." });
                 this.config.outputObj = msg?.output || this.config?.outputObj || "payload";
 
+                const querySourceType = this.config.querySourceType || 'msg';
+                const querySource = this.config.querySource || 'query';
+                const paramsSourceType = this.config.paramsSourceType || 'msg';
+                const paramsSource = this.config.paramsSource || 'parameters';
+
+                let currentQueryParams = await new Promise((resolve, reject) => {
+                    RED.util.evaluateNodeProperty(paramsSource, paramsSourceType, this, msg, (err, value) => {
+                        if (err) { resolve(undefined); }
+                        else { resolve(value); }
+                    });
+                });
+
+                let currentQueryString = await new Promise((resolve, reject) => {
+                     RED.util.evaluateNodeProperty(querySource, querySourceType, this, msg, (err, value) => {
+                        if (err) { resolve(undefined); }
+                        else { resolve(value || this.config.query || ""); }
+                    });
+                });
+                
+                if (!currentQueryString) { throw new Error("No query to execute"); }
+                
                 isPreparedStatement = currentQueryParams || (currentQueryString && currentQueryString.includes("?"));
                 if (!isPreparedStatement && currentQueryString) {
                     for (const parsed of mustache.parse(currentQueryString)) {
@@ -335,8 +339,6 @@ module.exports = function (RED) {
                     }
                     currentQueryString = mustache.render(currentQueryString, msg);
                 }
-                if (msg?.query) { currentQueryString = msg.query; }
-                if (!currentQueryString) { throw new Error("No query to execute"); }
 
                 const execute = async (conn) => {
                     if (this.config.streaming) {
@@ -348,7 +350,7 @@ module.exports = function (RED) {
                         if(done) done();
                     }
                 };
-
+                
                 let firstAttemptError = null;
                 try {
                     connectionFromPool = await this.poolNode.connect();
@@ -431,7 +433,7 @@ module.exports = function (RED) {
                 if (this.poolNode && this.poolNode.config.retryOnMsg) {
                     this.log("New message received, overriding retry timer and attempting query now.");
                     clearTimeout(this.retryTimer);
-this.retryTimer = null;
+                    this.retryTimer = null;
                     this.isAwaitingRetry = false;
                 } else {
                     this.warn("Node is in a retry-wait state. New message ignored as per configuration.");

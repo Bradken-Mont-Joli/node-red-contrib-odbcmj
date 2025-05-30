@@ -1,6 +1,6 @@
 # Node-RED Contrib ODBC MJ
 
-A powerful and robust Node-RED node to connect to any ODBC data source. It features connection pooling, advanced retry logic, secure credential management, and result set streaming.
+A powerful and robust Node-RED node to connect to any ODBC data source. It features connection pooling, advanced retry logic, secure credential management, dynamic query sources, and result set streaming.
 
 This node is a fork with significant enhancements to provide stability and advanced features for enterprise use cases.
 
@@ -10,6 +10,7 @@ This node is a fork with significant enhancements to provide stability and advan
 -   **Hybrid Configuration**: Configure connections using simple structured fields or a full connection string for maximum flexibility.
 -   **Secure Credential Storage**: Passwords are saved using Node-RED's built-in credential system.
 -   **Connection Tester**: Instantly validate your connection settings from the configuration panel.
+-   **Dynamic Inputs**: Source your SQL query and parameters from message properties, flow/global context, or environment variables.
 -   **Advanced Retry Logic**: Automatically handles connection errors with configurable delays and retries to ensure flow resilience.
 -   **Result Streaming**: Process queries with millions of rows without exhausting memory by streaming results as chunks.
 -   **Syntax Checker**: Optionally parse the SQL query to validate its structure.
@@ -38,11 +39,9 @@ This is the easiest and most secure way to set up a connection for common databa
 
 ##### 2. Connection String Mode (Advanced)
 
-This mode gives you full control for complex or non-standard connection strings.
+This mode gives you full control for complex or non-standard connection strings. In this mode, you are responsible for the entire content of the string.
 
 -   **Connection String**: Enter the complete ODBC connection string.
--   **Password Handling**: For security, **do not** write your password directly in the string. Instead, use the `{{{password}}}` placeholder. The node will automatically replace it with the password entered in the secure `Password` field below.
-    -   Example: `DRIVER={...};SERVER=...;UID=myuser;PWD={{{password}}};`
 
 #### Test Connection
 
@@ -60,7 +59,7 @@ A **Test Connection** button in the configuration panel allows you to instantly 
 #### Error Handling & Retry
 
 -   **`retryFreshConnection`** `<boolean>` (optional): If a query fails, the node will retry once with a brand new connection. If this succeeds, the entire connection pool is reset to clear any stale connections. Default: false.
--   **`retryDelay`** `<number>` (optional): If both the pooled and the fresh connection attempts fail, this sets a delay in seconds before another retry is attempted. This prevents infinite loops. A value of **0** disables further automatic retries. Default: 5.
+-   **`retryDelay`** `<number>` (optional): If both the pooled and the fresh connection attempts fail, this sets a delay in seconds before another retry is attempted. A value of **0** disables further automatic retries. Default: 5.
 -   **`retryOnMsg`** `<boolean>` (optional): If the node is waiting for a timed retry, a new incoming message can override the timer and trigger an immediate retry. Default: true.
 
 #### Advanced
@@ -77,14 +76,20 @@ This node executes a query against the configured database when it receives a me
 #### Properties
 
 -   **`connection`** `<odbc config>` (**required**): The configuration node that defines the connection settings.
--   **`query`** `<string>` (optional): The SQL query to execute. Can contain Mustache syntax (e.g., `{{{payload.id}}}`) which will be rendered using the incoming message object.
--   **`result to`** `<string>` (**required**): The property of the output message where the results will be stored (e.g., `payload`). Default: `payload`.
+-   **`Query`** `<string>` (optional): A default SQL query to execute if no query is provided dynamically from an input source. Can contain Mustache syntax (e.g., `{{{payload.id}}}`).
+-   **`Result to`** `<string>` (**required**): The property of the output message where the results will be stored (e.g., `payload`). Default: `payload`.
 
-#### Inputs
+#### Dynamic Inputs
 
-The node can be configured dynamically using the incoming `msg` object:
--   **`msg.query`**: A query string that will override the one configured in the node.
--   **`msg.parameters`**: An array of values for prepared statements (when the query contains `?` placeholders).
+To make the node highly flexible, the SQL query and its parameters can be sourced dynamically using **Typed Inputs**.
+
+-   **`Query Source`**: A Typed Input that specifies where to find the query string at runtime. This value **overrides** the static query defined in the editor.
+    -   *Default*: `msg.query` (for backward compatibility).
+    -   *Example*: Set to `flow.mySqlQuery` to read the query from a flow context variable.
+
+-   **`Parameters Source`**: A Typed Input that specifies where to find the array or object of parameters for prepared statements.
+    -   *Default*: `msg.parameters`.
+    -   *Example*: Set to `msg.payload.bindings` to use the array found in that property.
 
 #### Streaming Results
 

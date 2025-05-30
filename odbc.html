@@ -31,13 +31,11 @@
         oneditprepare: function () {
             var node = this;
 
-            // Logique pour les sections déroulantes
             $('.form-section-header').on('click', function() {
                 $(this).toggleClass('expanded');
                 $(this).next('.form-section-content').slideToggle();
             });
 
-            // Logique pour le mode de connexion hybride
             function toggleConnectionMode(mode) {
                 if (mode === 'structured') {
                     $(".config-mode-structured").show();
@@ -63,7 +61,6 @@
                 toggleDriverField($(this).val());
             }).trigger("change");
 
-            // Logiques pour les cases à cocher
             $("#node-config-input-syntaxtick").on("change", function () {
                 $(".input-syntax").toggle(this.checked);
             }).trigger("change");
@@ -72,7 +69,6 @@
                 $(".retry-options").toggle(this.checked);
             }).trigger("change");
 
-            // Logique pour le bouton de test
             $('#node-config-test-connection').on('click', function() {
                 var button = $(this);
                 var originalText = "Test Connection";
@@ -81,7 +77,6 @@
                 button.text(' Testing...').prop('disabled', true);
                 
                 var connectionMode = $("#node-config-input-connectionMode").val();
-                
                 var configData = {
                     connectionMode: connectionMode,
                     dbType: $("#node-config-input-dbType").val(),
@@ -90,7 +85,6 @@
                     database: $("#node-config-input-database").val(),
                     user: $("#node-config-input-user").val(),
                     connectionString: $("#node-config-input-connectionString").val(),
-                    // Le mot de passe n'est envoyé que si on est en mode structuré
                     password: (connectionMode === 'structured') ? $("#node-config-input-password").val() : null
                 };
 
@@ -277,7 +271,12 @@
             query: { value: "" },
             outputObj: { value: "payload" },
             streaming: { value: false },
-            streamChunkSize: { value: 1, validate: RED.validators.number() }
+            streamChunkSize: { value: 1, validate: RED.validators.number() },
+            // Nouveaux `defaults` pour les Typed Inputs
+            querySource: { value: "query", required: false },
+            querySourceType: { value: "msg", required: false },
+            paramsSource: { value: "parameters", required: false },
+            paramsSourceType: { value: "msg", required: false }
         },
         inputs: 1,
         outputs: 1,
@@ -295,6 +294,19 @@
             $("#node-input-streaming").on("change", function() {
                 $(".stream-options").toggle(this.checked);
             }).trigger("change");
+
+            // Initialisation des Typed Inputs
+            $("#node-input-querySource").typedInput({
+                default: 'msg',
+                typeField: "#node-input-querySourceType",
+                types: ['msg', 'flow', 'global', 'env', 'str', 'jsonata']
+            });
+            
+            $("#node-input-paramsSource").typedInput({
+                default: 'msg',
+                typeField: "#node-input-paramsSourceType",
+                types: ['msg', 'flow', 'global', 'env', 'jsonata']
+            });
         },
         oneditsave: function () {
             this.query = this.editor.getValue();
@@ -318,14 +330,29 @@
         <input type="text" id="node-input-connection" />
     </div>
     <div class="form-row node-text-editor-row">
-        <label for="node-input-query" style="width: 100% !important;"><i class="fa fa-search"></i> Query</label>
+        <label for="node-input-query" style="width: 100% !important;"><i class="fa fa-file-code-o"></i> Query (fallback)</label>
         <div style="height: 250px;" class="node-text-editor" id="node-input-query-editor"></div>
     </div>
     <div class="form-row">
-        <label for="node-input-outputObj"><i class="fa fa-edit"></i> Result to</label>
+        <label for="node-input-outputObj"><i class="fa fa-sign-out"></i> Result to</label>
         <span>msg.</span><input type="text" id="node-input-outputObj" placeholder="payload" style="width: 64%;"/>
     </div>
+    
     <hr/>
+    
+    <div class="form-row">
+        <label for="node-input-querySource"><i class="fa fa-crosshairs"></i> Query Source</label>
+        <input type="text" id="node-input-querySource" style="width: 70%;">
+        <input type="hidden" id="node-input-querySourceType">
+    </div>
+    <div class="form-row">
+        <label for="node-input-paramsSource"><i class="fa fa-list-ol"></i> Parameters Source</label>
+        <input type="text" id="node-input-paramsSource" style="width: 70%;">
+        <input type="hidden" id="node-input-paramsSourceType">
+    </div>
+
+    <hr/>
+
     <div class="form-row">
         <label for="node-input-streaming" style="width: auto;"><i class="fa fa-arrows-v"></i> Stream Results</label>
         <input type="checkbox" id="node-input-streaming" style="display: inline-block; width: auto; vertical-align: top;">
@@ -335,4 +362,73 @@
         <input type="number" id="node-input-streamChunkSize" placeholder="1" style="width: 100px;">
         <span class="form-tips">Number of rows per output message.</span>
     </div>
+</script>
+
+
+<script type="text/markdown" data-help-name="odbc config">
+A configuration node that manages the connection to your database.
+
+### Connection Modes
+Version 2.0 introduces two ways to configure your connection:
+
+#### 1. Structured Fields Mode (Recommended)
+This is the easiest and most secure way to set up a connection for common databases.
+- **Database Type**: Select your database (e.g., SQL Server, PostgreSQL, MySQL). The node will use the appropriate driver name and connection string syntax. For unlisted databases, choose "Other" and provide the driver name manually.
+- **Server**: The hostname or IP address of the database server, optionally followed by a comma and the port number (e.g., `mydb.server.com,1433`).
+- **Database**: The name of the database to connect to (optional).
+- **User**: The username for authentication.
+- **Password**: The password for authentication. This is stored securely using Node-RED's credential system.
+
+#### 2. Connection String Mode (Advanced)
+This mode gives you full control for complex or non-standard connection strings.
+- **Connection String**: Enter the complete ODBC connection string. It is your responsibility to provide a valid string for your driver.
+
+### Test Connection
+A **Test Connection** button in the configuration panel allows you to instantly verify your settings without deploying the flow.
+
+### Pool Options
+- **`initialSize`**: The number of connections to create when the pool is initialized. Default: 5.
+- **`maxSize`**: The maximum number of connections allowed in the pool. Default: 15.
+- (See `odbc` package documentation for more details on pool options).
+
+### Error Handling & Retry
+- **`retryFreshConnection`**: If a query fails, the node will retry once with a brand new connection. If this succeeds, the entire connection pool is reset to clear any stale connections.
+- **`retryDelay`**: If both attempts fail, this sets a delay in seconds before another retry is attempted. A value of **0** disables further automatic retries.
+- **`retryOnMsg`**: If the node is waiting for a timed retry, a new incoming message can override the timer and trigger an immediate retry.
+
+### Advanced
+- **`syntaxChecker`**: If activated, the query string will be parsed and appended to the output message at `msg.parsedQuery`.
+</script>
+
+<script type="text/markdown" data-help-name="odbc">
+Executes a query against a configured ODBC data source.
+
+### Inputs
+
+- **Query Source** (optional): Specify where to get the query string from. You can use a message property (`msg.`), flow context (`flow.`), global context (`global.`), an environment variable (`env.`), or a JSONata expression. If the source is empty or not found, the node will use the query from the "Query (fallback)" editor below.
+  - *Default behavior (for backward compatibility): `msg.query`*
+
+- **Parameters Source** (optional): Specify where to get the parameters for a prepared statement. This should resolve to an array of values.
+  - *Default behavior (for backward compatibility): `msg.parameters`*
+
+### Properties
+
+- **Connection**: The `odbc config` node to use.
+- **Query (fallback)**: A static SQL query to run if the "Query Source" does not provide one. Can contain Mustache syntax (e.g., `{{{payload.id}}}`).
+- **Result to**: The `msg` property where the query result will be stored. Default: `payload`.
+
+### Streaming Results
+
+For queries that return a large number of rows, streaming prevents high memory usage by sending multiple messages instead of one large one.
+
+- **`Stream Results`**: Enables or disables streaming mode.
+- **`Chunk Size`**: The number of rows to include in each output message. A value of `1` means one message will be sent for every single row.
+
+#### Streaming Output Format
+When streaming is active, each output message will contain:
+- A payload (or the configured output property) containing an array of rows for the current chunk.
+- A `msg.odbc_stream` object with metadata for tracking progress:
+    - `index`: The starting index of the current chunk (e.g., 0, 100, 200...).
+    - `count`: The number of rows in the current chunk.
+    - `complete`: A boolean that is `true` only on the very last message of the stream, useful for triggering a final action.
 </script>
