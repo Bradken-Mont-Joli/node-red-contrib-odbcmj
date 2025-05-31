@@ -181,6 +181,10 @@ module.exports = function (RED) {
         this.poolNode = RED.nodes.getNode(this.config.connection);
         this.name = this.config.name;
 
+        // Propriétés pour la logique de retry temporisée
+        this.isAwaitingRetry = false;
+        this.retryTimer = null;
+
         this.enhanceError = (error, query, params, defaultMessage = "Query error") => {
             const queryContext = (() => {
                 let s = "";
@@ -204,6 +208,7 @@ module.exports = function (RED) {
         };
 
         this.executeQueryAndProcess = async (dbConnection, queryString, queryParams, msg) => {
+            // ... (contenu de cette fonction inchangé par rapport à la dernière version)
             const result = await dbConnection.query(queryString, queryParams);
             if (typeof result === "undefined") { throw new Error("Query returned undefined."); }
             const newMsg = RED.util.cloneMessage(msg);
@@ -247,23 +252,18 @@ module.exports = function (RED) {
         };
         
         this.executeStreamQuery = async (dbConnection, queryString, queryParams, msg, send) => {
+            // ... (contenu de cette fonction inchangé par rapport à la dernière version avec le message de complétion final)
             const chunkSize = parseInt(this.config.streamChunkSize) || 1;
             const fetchSize = chunkSize > 100 ? 100 : chunkSize;
             let cursor;
-        
             try {
                 cursor = await dbConnection.query(queryString, queryParams, { cursor: true, fetchSize: fetchSize });
                 this.status({ fill: "blue", shape: "dot", text: "streaming rows..." });
-        
                 let rowCount = 0;
                 let chunk = [];
-        
                 while (true) {
                     const rows = await cursor.fetch();
-                    if (!rows || rows.length === 0) {
-                        break;
-                    }
-        
+                    if (!rows || rows.length === 0) { break; }
                     for (const row of rows) {
                         rowCount++;
                         chunk.push(row);
@@ -276,51 +276,63 @@ module.exports = function (RED) {
                         }
                     }
                 }
-        
                 if (chunk.length > 0) {
                     const newMsg = RED.util.cloneMessage(msg);
                     objPath.set(newMsg, this.config.outputObj, chunk);
                     newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: false };
                     send(newMsg);
                 }
-        
                 const finalMsg = RED.util.cloneMessage(msg);
                 objPath.set(finalMsg, this.config.outputObj, []);
                 finalMsg.odbc_stream = { index: rowCount, count: 0, complete: true };
                 send(finalMsg);
-        
                 this.status({ fill: "green", shape: "dot", text: `success (${rowCount} rows)` });
-        
             } finally {
-                if (cursor) {
-                    await cursor.close();
-                }
+                if (cursor) await cursor.close();
             }
         };
 
         this.on("input", async (msg, send, done) => {
+            // --- NOUVEAU : GESTION DE retryOnMsg ---
+            if (this.isAwaitingRetry) {
+                if (this.poolNode && this.poolNode.config.retryOnMsg === true) { // s'assurer que c'est bien un booléen true
+                    this.log("New message received, overriding retry timer and attempting query now.");
+                    clearTimeout(this.retryTimer);
+                    this.retryTimer = null;
+                    this.isAwaitingRetry = false;
+                    // Laisser l'exécution se poursuivre
+                } else {
+                    this.warn("Node is in a retry-wait state. New message ignored as per configuration.");
+                    if (done) done(); // Terminer le traitement pour CE message
+                    return;
+                }
+            }
+            // S'assurer que les états de retry sont propres si on n'est pas dans un retry forcé par un nouveau message
+            this.isAwaitingRetry = false;
+            if(this.retryTimer) {
+                clearTimeout(this.retryTimer);
+                this.retryTimer = null;
+            }
+            // --- FIN DE LA GESTION DE retryOnMsg ---
+
             if (!this.poolNode) {
+                this.status({ fill: "red", shape: "ring", text: "No config node" });
                 return done(new Error("ODBC Config node not properly configured."));
             }
-    
+
             const execute = async (connection) => {
                 this.config.outputObj = this.config.outputObj || "payload";
-                
                 const querySourceType = this.config.querySourceType || 'msg';
                 const querySource = this.config.querySource || 'query';
                 const paramsSourceType = this.config.paramsSourceType || 'msg';
                 const paramsSource = this.config.paramsSource || 'parameters';
-                
                 const params = await new Promise(resolve => RED.util.evaluateNodeProperty(paramsSource, paramsSourceType, this, msg, (err, val) => resolve(err ? undefined : val)));
                 let query = await new Promise(resolve => RED.util.evaluateNodeProperty(querySource, querySourceType, this, msg, (err, val) => resolve(err ? undefined : (val || this.config.query || ""))));
-                
                 if (!query) throw new Error("No query to execute");
-    
                 const isPreparedStatement = params || (query && query.includes("?"));
                 if (!isPreparedStatement && query) {
                     query = mustache.render(query, msg);
                 }
-                
                 this.status({ fill: "blue", shape: "dot", text: "executing..." });
                 if (this.config.streaming) {
                     await this.executeStreamQuery(connection, query, params, msg, send);
@@ -330,13 +342,15 @@ module.exports = function (RED) {
                     send(newMsg);
                 }
             };
-    
+
             let connectionFromPool;
+            let errorAfterInitialAttempts = null;
+
             try {
                 this.status({ fill: "yellow", shape: "dot", text: "connecting..." });
                 connectionFromPool = await this.poolNode.connect();
                 await execute(connectionFromPool);
-                return done();
+                return done(); // Succès de la première tentative
             } catch (poolError) {
                 this.warn(`First attempt with pooled connection failed: ${poolError.message}`);
                 if (this.poolNode.config.retryFreshConnection) {
@@ -350,27 +364,73 @@ module.exports = function (RED) {
                         await execute(freshConnection);
                         this.log("Query successful with fresh connection. Resetting pool.");
                         await this.poolNode.resetPool();
-                        return done();
+                        return done(); // Succès de la tentative avec connexion fraîche
                     } catch (freshError) {
-                        this.status({ fill: "red", shape: "ring", text: "retry failed" });
-                        return done(this.enhanceError(freshError, null, null, "Retry with fresh connection also failed"));
+                        errorAfterInitialAttempts = this.enhanceError(freshError, null, null, "Retry with fresh connection also failed");
                     } finally {
                         if (freshConnection) await freshConnection.close();
                     }
                 } else {
-                    this.status({ fill: "red", shape: "ring", text: "query error" });
-                    return done(this.enhanceError(poolError));
+                    errorAfterInitialAttempts = this.enhanceError(poolError);
                 }
             } finally {
                 if (connectionFromPool) await connectionFromPool.close();
             }
+
+            // --- NOUVEAU : GESTION DE retryDelay ---
+            if (errorAfterInitialAttempts) {
+                const retryDelaySeconds = parseInt(this.poolNode.config.retryDelay, 10); // S'assurer que c'est un nombre
+
+                if (retryDelaySeconds > 0) {
+                    this.warn(`Query failed. Scheduling retry in ${retryDelaySeconds} seconds. Error: ${errorAfterInitialAttempts.message}`);
+                    this.status({ fill: "red", shape: "ring", text: `Retry in ${retryDelaySeconds}s...` });
+                    this.isAwaitingRetry = true;
+                    
+                    // Important: `this.receive(msg)` ne peut pas être appelé directement dans un `setTimeout`
+                    // sans s'assurer que `this` est correctement lié. Utiliser une arrow function ou .bind(this).
+                    // De plus, `this.receive` est une méthode non documentée pour réinjecter un message.
+                    // La méthode standard pour retenter est que le nœud se renvoie le message à lui-même.
+                    // Pour cela, le `done()` de l'invocation actuelle doit être appelé.
+                    
+                    this.retryTimer = setTimeout(() => {
+                        this.isAwaitingRetry = false; // Prêt pour une nouvelle tentative
+                        this.retryTimer = null;
+                        this.log(`Retry timer expired for message. Re-emitting for node ${this.id || this.name}.`);
+                        // Réinjecter le message pour une nouvelle tentative de traitement.
+                        // Le message original `msg` est utilisé.
+                        this.receive(msg); 
+                    }, retryDelaySeconds * 1000);
+                    
+                    // L'invocation actuelle du message se termine ici, sans erreur si un retry est planifié.
+                    // L'erreur sera gérée par la prochaine invocation si elle échoue à nouveau.
+                    if (done) return done();
+
+                } else {
+                    // Pas de retryDelay configuré ou il est à 0. C'est une défaillance définitive pour CE message.
+                    this.status({ fill: "red", shape: "ring", text: "query error" });
+                    if (done) return done(errorAfterInitialAttempts);
+                }
+            } else {
+                // Normalement, on ne devrait pas arriver ici si done() a été appelé après un succès.
+                // C'est une sécurité.
+                if (done) return done();
+            }
+            // --- FIN DE LA GESTION DE retryDelay ---
         });
         
         this.on("close", (done) => {
+            // --- NOUVEAU : Nettoyage du timer ---
+            if (this.retryTimer) {
+                clearTimeout(this.retryTimer);
+                this.retryTimer = null;
+                this.isAwaitingRetry = false;
+                this.log("Cleared pending retry timer on node close/redeploy.");
+            }
+            // --- FIN DU NETTOYAGE ---
             this.status({});
             done();
         });
-    
+
         if (this.poolNode) {
             this.status({ fill: "green", shape: "dot", text: "ready" });
         } else {
@@ -378,6 +438,6 @@ module.exports = function (RED) {
             this.warn("ODBC Config node not found or not deployed.");
         }
     }
-    
+
     RED.nodes.registerType("odbc", odbc);
 };
