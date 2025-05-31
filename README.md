@@ -14,6 +14,7 @@ This node is a fork with significant enhancements to provide stability and advan
 -   **Advanced Retry Logic**: Automatically handles connection errors with configurable delays and retries to ensure flow resilience.
 -   **Result Streaming**: Process queries with millions of rows without exhausting memory by streaming results as chunks.
 -   **Syntax Checker**: Optionally parse the SQL query to validate its structure.
+-   **Query Timeout**: Configure a timeout for query execution to prevent indefinite hangs.
 
 ---
 
@@ -46,21 +47,23 @@ This mode gives you full control for complex or non-standard connection strings.
 #### Test Connection
 
 A **Test Connection** button in the configuration panel allows you to instantly verify your settings without deploying the flow.
+> **Note:** For security reasons, passwords are not reloaded into the editor. If your connection requires a password, you must **re-enter it** in the password field before clicking the test button (in Structured Mode). For Connection String mode, ensure the full string (including password if needed) is present in the connection string field itself.
 
-#### Pool Options
+#### Pool & Connection Options
 
--   **`initialSize`** `<number>` (optional): The number of connections to create when the pool is initialized. Default: 5.
--   **`incrementSize`** `<number>` (optional): The number of connections to create when the pool is exhausted. Default: 5.
--   **`maxSize`** `<number>` (optional): The maximum number of connections allowed in the pool. Default: 15.
--   **`shrinkPool`** `<boolean>` (optional): Whether to reduce the number of connections to `initialSize` when they are returned to the pool. Default: true.
--   **`connectionTimeout`** `<number>` (optional): The number of seconds for a connection to remain idle before closing. Default: 3.
--   **`loginTimeout`** `<number>` (optional): The number of seconds for an attempt to create a connection to succeed. Default: 3.
+-   **`Initial Pool Size`** `<number>` (optional): The number of connections to create when the pool is initialized. Default: 5.
+-   **`Increment Pool Size`** `<number>` (optional): The number of connections to create when the pool is exhausted. Default: 5.
+-   **`Max Pool Size`** `<number>` (optional): The maximum number of connections allowed in the pool. Default: 15.
+-   **`Shrink Pool`** `<boolean>` (optional): If checked, reduces the number of connections to `Initial Pool Size` when they are returned to the pool if the pool has grown. Default: true.
+-   **`Idle Timeout`** `<number>` (optional): The number of seconds for a connection in the pool to remain idle before closing. Default: 3 seconds. (Refers to the `connectionTimeout` property of the `odbc` library's pool options).
+-   **`Login Timeout`** `<number>` (optional): The number of seconds for an attempt to establish a new connection to succeed. Default: 5 seconds.
+-   **`Query Timeout`** `<number>` (optional): The number of seconds for a query to execute before timing out. A value of **0** means infinite or uses the driver/database default. Default: 0 seconds.
 
 #### Error Handling & Retry
 
--   **`retryFreshConnection`** `<boolean>` (optional): If a query fails, the node will retry once with a brand new connection. If this succeeds, the entire connection pool is reset to clear any stale connections. Default: false.
--   **`retryDelay`** `<number>` (optional): If both the pooled and the fresh connection attempts fail, this sets a delay in seconds before another retry is attempted. A value of **0** disables further automatic retries. Default: 5.
--   **`retryOnMsg`** `<boolean>` (optional): If the node is waiting for a timed retry, a new incoming message can override the timer and trigger an immediate retry. Default: true.
+-   **`Retry with fresh connection`** `<boolean>` (optional): If a query fails using a connection from the pool, the node will try once more with a brand new, direct connection. If this succeeds, the entire connection pool is reset to clear any potentially stale connections. Default: false.
+-   **`Retry Delay`** `<number>` (optional): If all immediate attempts (pooled and, if enabled, fresh connection) fail, this sets a delay in seconds before another retry is attempted for the incoming message. A value of **0** disables this timed retry mechanism. Default: 5.
+-   **`Retry on new message`** `<boolean>` (optional): If the node is waiting for a timed retry (due to `Retry Delay`), a new incoming message can, if this is checked, override the timer and trigger an immediate retry of the *original* message that failed. Default: true.
 
 #### Advanced
 
@@ -100,9 +103,16 @@ For queries that return a large number of rows, streaming prevents high memory u
 
 ##### Streaming Output Format
 
-When streaming is active, each output message will contain:
--   A payload (or the configured output property) containing an array of rows for the current chunk.
--   A `msg.odbc_stream` object with metadata for tracking progress:
-    -   `index`: The starting index of the current chunk (e.g., 0, 100, 200...).
-    -   `count`: The number of rows in the current chunk.
-    -   `complete`: A boolean that is `true` only on the very last message, and `false` otherwise. The last payload will always be an empty array.  This is useful for triggering a downstream action once all rows have been processed.
+When streaming is active, the node sends messages in sequence:
+
+1.  **Data Messages**: One or more messages where the payload (or the configured output property) contains an array of rows for the current chunk. For these messages, `msg.odbc_stream.complete` will be **`false`**.
+2.  **Completion Message**: A single, final message indicating the end of the stream. For this message:
+    -   The payload (or configured output property) will be an **empty array `[]`**.
+    -   `msg.odbc_stream.complete` will be **`true`**.
+
+The `msg.odbc_stream` object contains metadata for tracking:
+-   `index`: The starting index of the current chunk (0-based). For the completion message, this will be the total number of data rows processed.
+-   `count`: The number of rows in the current chunk. This will be `0` for the completion message.
+-   `complete`: The boolean flag (`true`/`false`).
+
+This pattern ensures you can reliably trigger a final action (like closing a file or calculating an aggregate) only when the message with `complete: true` is received.

@@ -13,14 +13,15 @@
             database: { value: "" },
             user: { value: "" },
             connectionString: { value: "" },
-            initialSize: { value: 5 },
-            incrementSize: { value: 5 },
-            maxSize: { value: 15 },
+            initialSize: { value: 5, validate: RED.validators.number(true) },
+            incrementSize: { value: 5, validate: RED.validators.number(true) },
+            maxSize: { value: 15, validate: RED.validators.number(true) },
             shrink: { value: true },
-            connectionTimeout: { value: 3 },
-            loginTimeout: { value: 3 },
+            connectionTimeout: { value: 3, validate: RED.validators.number(true) }, // Idle timeout for connections in pool (odbc lib specific)
+            loginTimeout: { value: 5, validate: RED.validators.number(true) },      // Login timeout for new connections
+            queryTimeoutSeconds: { value: 0, validate: RED.validators.number(true) }, // NOUVEAU: Timeout pour les requêtes
             retryFreshConnection: { value: false },
-            retryDelay: { value: 5, validate: RED.validators.number() },
+            retryDelay: { value: 5, validate: RED.validators.number(true) },
             retryOnMsg: { value: true },
             syntaxtick: { value: false },
             syntax: { value: "mysql" },
@@ -79,19 +80,22 @@
                         RED.notify("Le champ 'Server' est requis pour le test.", {type: "warning", timeout: 3000});
                         return;
                     }
-                } else { 
+                    if ($("#node-config-input-password").val() === "" && $("#node-config-input-user").val().trim() !== "") {
+                        RED.notify("Note: Pour tester une connexion structurée avec mot de passe, veuillez le (re)saisir.", {type: "info", timeout: 4500});
+                        // On ne bloque pas, l'utilisateur peut vouloir tester une connexion sans mot de passe si le user est optionnel
+                    }
+                } else { // Mode 'string'
                     var connStr = $("#node-config-input-connectionString").val().trim();
                     if (!connStr) {
                         RED.notify("La chaîne de connexion est requise pour le test.", {type: "warning", timeout: 3000});
-                        return; 
+                        return;
                     }
-                    // Nouvelle validation :
-                    // Elle est invalide SEULEMENT si elle ne contient PAS de DSN ET qu'elle ne respecte PAS l'ancien critère pour les chaînes DSN-less.
+                    
                     var isDsnString = /DSN=[^;]+/i.test(connStr);
-                    var isDriverBasedString = /DRIVER=\{.+?\}/i.test(connStr) && /(SERVER|DATABASE|UID|PWD)=/i.test(connStr); // Un peu plus complet
+                    var isDriverBasedString = /DRIVER=\{.+?\}/i.test(connStr) && /(SERVER|DATABASE|UID|PWD)=[^;]+/i.test(connStr);
 
                     if (!isDsnString && !isDriverBasedString) {
-                         RED.notify("La chaîne de connexion semble invalide ou incomplète (ex: DSN=value; ou DRIVER={...};SERVER=...;).", {type: "warning", timeout: 4000});
+                         RED.notify("La chaîne de connexion semble invalide ou incomplète (ex: DSN=valeur; ou DRIVER={...};SERVER=...;).", {type: "warning", timeout: 4500});
                          return;
                     }
                 }
@@ -109,7 +113,7 @@
                     database: $("#node-config-input-database").val(),
                     user: $("#node-config-input-user").val(),
                     connectionString: $("#node-config-input-connectionString").val(),
-                    password: (connectionMode === 'structured') ? $("#node-config-input-password").val() : null
+                    password: $("#node-config-input-password").val() 
                 };
 
                 $.ajax({
@@ -135,22 +139,10 @@
 </script>
 
 <style>
-    .form-section-header {
-        cursor: pointer;
-        padding: 5px;
-        border-bottom: 1px solid #ddd;
-        margin-bottom: 10px;
-        user-select: none;
-    }
-    .form-section-header i.fa-caret-right {
-        transition: transform 0.2s ease-in-out;
-    }
-    .form-section-header.expanded i.fa-caret-right {
-        transform: rotate(90deg);
-    }
-    .form-section-content {
-        padding-left: 20px;
-    }
+    .form-section-header { cursor: pointer; padding: 5px; border-bottom: 1px solid #ddd; margin-bottom: 10px; user-select: none; }
+    .form-section-header i.fa-caret-right { transition: transform 0.2s ease-in-out; }
+    .form-section-header.expanded i.fa-caret-right { transform: rotate(90deg); }
+    .form-section-content { padding-left: 20px; }
 </style>
 
 <script type="text/html" data-template-name="odbc config">
@@ -213,33 +205,41 @@
 
     <hr/>
     
-    <div class="form-section-header"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-sitemap"></i> Pool Options</h4></div>
+    <div class="form-section-header"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-sitemap"></i> Pool & Connection Options</h4></div>
     <div class="form-section-content" style="display: none;">
         <div class="form-row">
-            <label for="node-config-input-initialSize"><i class="fa fa-play"></i> Initial Size</label>
+            <label for="node-config-input-initialSize"><i class="fa fa-play"></i> Initial Pool Size</label>
             <input type="number" id="node-config-input-initialSize" placeholder="5" />
         </div>
         <div class="form-row">
-            <label for="node-config-input-incrementSize"><i class="fa fa-plus"></i> Increment Size</label>
+            <label for="node-config-input-incrementSize"><i class="fa fa-plus"></i> Increment Pool Size</label>
             <input type="number" id="node-config-input-incrementSize" placeholder="5" />
         </div>
         <div class="form-row">
-            <label for="node-config-input-maxSize"><i class="fa fa-stop"></i> Max Size</label>
+            <label for="node-config-input-maxSize"><i class="fa fa-stop"></i> Max Pool Size</label>
             <input type="number" id="node-config-input-maxSize" placeholder="15" />
         </div>
         <div class="form-row">
             <label for="node-config-input-shrink"><i class="fa fa-compress"></i> Shrink Pool</label>
             <input type="checkbox" id="node-config-input-shrink" style="margin-left:0px; vertical-align:top; width:auto !important;" />
+            <span class="form-tips" style="font-size: smaller;">Reduce pool to initial size when connections are returned.</span>
         </div>
         <div class="form-row">
-            <label for="node-config-input-connectionTimeout"><i class="fa fa-clock-o"></i> Connection Timeout</label>
+            <label for="node-config-input-connectionTimeout"><i class="fa fa-clock-o"></i> Idle Timeout</label>
             <input type="number" id="node-config-input-connectionTimeout" placeholder="3" style="width: 80px;"/>
             <span style="margin-left: 5px;">seconds</span>
+            <span class="form-tips" style="font-size: smaller;">For connections in pool.</span>
         </div>
         <div class="form-row">
-            <label for="node-config-input-loginTimeout"><i class="fa fa-clock-o"></i> Login Timeout</label>
-            <input type="number" id="node-config-input-loginTimeout" placeholder="3" style="width: 80px;" />
+            <label for="node-config-input-loginTimeout"><i class="fa fa-sign-in"></i> Login Timeout</label>
+            <input type="number" id="node-config-input-loginTimeout" placeholder="5" style="width: 80px;" />
             <span style="margin-left: 5px;">seconds</span>
+            <span class="form-tips" style="font-size: smaller;">For establishing new connections.</span>
+        </div>
+        <div class="form-row">
+            <label for="node-config-input-queryTimeoutSeconds"><i class="fa fa-hourglass-half"></i> Query Timeout</label>
+            <input type="number" id="node-config-input-queryTimeoutSeconds" placeholder="0" style="width: 80px;" />
+            <span style="margin-left: 5px;">seconds (0=infinite/driver default)</span>
         </div>
     </div>
     
@@ -248,16 +248,18 @@
         <div class="form-row">
             <label for="node-config-input-retryFreshConnection" style="width: auto;"><i class="fa fa-refresh"></i> Retry with fresh connection</label>
             <input type="checkbox" id="node-config-input-retryFreshConnection" style="display: inline-block; width: auto; vertical-align: top;" />
+            <span class="form-tips" style="font-size: smaller;">If a pooled connection fails, try once with a new one.</span>
         </div>
         <div class="retry-options" style="padding-left: 20px;">
             <div class="form-row">
                 <label for="node-config-input-retryDelay"><i class="fa fa-history"></i> Retry Delay</label>
                 <input type="number" id="node-config-input-retryDelay" placeholder="5" style="width: 80px;" />
-                    <span style="margin-left: 5px;">seconds</span>
+                    <span style="margin-left: 5px;">seconds (0=disable timed retry)</span>
             </div>
             <div class="form-row">
                 <label for="node-config-input-retryOnMsg" style="width: auto;"><i class="fa fa-envelope-o"></i> Retry on new message</label>
                 <input type="checkbox" id="node-config-input-retryOnMsg" style="display: inline-block; width: auto; vertical-align: top;" />
+                <span class="form-tips" style="font-size: smaller;">If waiting, a new message triggers immediate retry.</span>
             </div>
         </div>
     </div>
@@ -287,112 +289,38 @@
 
 <script type="text/javascript">
     RED.nodes.registerType("odbc", {
-        category: "storage",
-        color: "#89A5C0",
-        defaults: {
-            name: { value: "" },
-            connection: { type: "odbc config", required: true },
-            query: { value: "" },
-            outputObj: { value: "payload" },
-            streaming: { value: false },
-            streamChunkSize: { value: 1, validate: RED.validators.number() },
-            querySource: { value: "query", required: false },
-            querySourceType: { value: "msg", required: false },
-            paramsSource: { value: "parameters", required: false },
-            paramsSourceType: { value: "msg", required: false }
-        },
-        inputs: 1,
-        outputs: 1,
-        icon: "db.svg",
-        label: function () {
-            return this.name || "odbc";
-        },
+        category: "storage", color: "#89A5C0",
+        defaults: { name: { value: "" }, connection: { type: "odbc config", required: true }, query: { value: "" }, outputObj: { value: "payload" }, streaming: { value: false }, streamChunkSize: { value: 1, validate: RED.validators.number() }, querySource: { value: "query", required: false }, querySourceType: { value: "msg", required: false }, paramsSource: { value: "parameters", required: false }, paramsSourceType: { value: "msg", required: false } },
+        inputs: 1, outputs: 1, icon: "db.svg", label: function () { return this.name || "odbc"; },
         oneditprepare: function () {
-            this.editor = RED.editor.createEditor({
-                id: "node-input-query-editor",
-                mode: "ace/mode/sql",
-                value: this.query,
-            });
-            
-            $("#node-input-streaming").on("change", function() {
-                $(".stream-options").toggle(this.checked);
-            }).trigger("change");
-
-            $("#node-input-querySource").typedInput({
-                default: 'msg',
-                typeField: "#node-input-querySourceType",
-                types: ['msg', 'flow', 'global', 'env', 'str', 'jsonata']
-            });
-            
-            $("#node-input-paramsSource").typedInput({
-                default: 'msg',
-                typeField: "#node-input-paramsSourceType",
-                types: ['msg', 'flow', 'global', 'env', 'jsonata']
-            });
+            this.editor = RED.editor.createEditor({ id: "node-input-query-editor", mode: "ace/mode/sql", value: this.query, });
+            $("#node-input-streaming").on("change", function() { $(".stream-options").toggle(this.checked); }).trigger("change");
+            $("#node-input-querySource").typedInput({ default: 'msg', typeField: "#node-input-querySourceType", types: ['msg', 'flow', 'global', 'env', 'str', 'jsonata'] });
+            $("#node-input-paramsSource").typedInput({ default: 'msg', typeField: "#node-input-paramsSourceType", types: ['msg', 'flow', 'global', 'env', 'jsonata'] });
         },
-        oneditsave: function () {
-            this.query = this.editor.getValue();
-            this.editor.destroy();
-            delete this.editor;
-        },
-        oneditcancel: function () {
-            this.editor.destroy();
-            delete this.editor;
-        },
+        oneditsave: function () { this.query = this.editor.getValue(); this.editor.destroy(); delete this.editor; },
+        oneditcancel: function () { this.editor.destroy(); delete this.editor; },
     });
 </script>
 
 <script type="text/html" data-template-name="odbc">
-    <div class="form-row">
-        <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
-        <input type="text" id="node-input-name" />
-    </div>
-    <div class="form-row">
-        <label for="node-input-connection"><i class="fa fa-cog"></i> Connection</label>
-        <input type="text" id="node-input-connection" />
-    </div>
-    <div class="form-row node-text-editor-row">
-        <label for="node-input-query" style="width: 100% !important;"><i class="fa fa-file-code-o"></i> Query (fallback)</label>
-        <div style="height: 250px;" class="node-text-editor" id="node-input-query-editor"></div>
-    </div>
-    <div class="form-row">
-        <label for="node-input-outputObj"><i class="fa fa-sign-out"></i> Result to</label>
-        <span>msg.</span><input type="text" id="node-input-outputObj" placeholder="payload" style="width: 64%;"/>
-    </div>
-    
+    <div class="form-row"> <label for="node-input-name"><i class="fa fa-tag"></i> Name</label> <input type="text" id="node-input-name" /> </div>
+    <div class="form-row"> <label for="node-input-connection"><i class="fa fa-cog"></i> Connection</label> <input type="text" id="node-input-connection" /> </div>
+    <div class="form-row node-text-editor-row"> <label for="node-input-query" style="width: 100% !important;"><i class="fa fa-file-code-o"></i> Query (fallback)</label> <div style="height: 250px;" class="node-text-editor" id="node-input-query-editor"></div> </div>
+    <div class="form-row"> <label for="node-input-outputObj"><i class="fa fa-sign-out"></i> Result to</label> <span>msg.</span><input type="text" id="node-input-outputObj" placeholder="payload" style="width: 64%;"/> </div>
     <hr/>
-    
-    <div class="form-row">
-        <label for="node-input-querySource"><i class="fa fa-crosshairs"></i> Query Source</label>
-        <input type="text" id="node-input-querySource" style="width: 70%;">
-        <input type="hidden" id="node-input-querySourceType">
-    </div>
-    <div class="form-row">
-        <label for="node-input-paramsSource"><i class="fa fa-list-ol"></i> Parameters Source</label>
-        <input type="text" id="node-input-paramsSource" style="width: 70%;">
-        <input type="hidden" id="node-input-paramsSourceType">
-    </div>
-
+    <div class="form-row"> <label for="node-input-querySource"><i class="fa fa-crosshairs"></i> Query Source</label> <input type="text" id="node-input-querySource" style="width: 70%;"> <input type="hidden" id="node-input-querySourceType"> </div>
+    <div class="form-row"> <label for="node-input-paramsSource"><i class="fa fa-list-ol"></i> Parameters Source</label> <input type="text" id="node-input-paramsSource" style="width: 70%;"> <input type="hidden" id="node-input-paramsSourceType"> </div>
     <hr/>
-
-    <div class="form-row">
-        <label for="node-input-streaming" style="width: auto;"><i class="fa fa-arrows-v"></i> Stream Results</label>
-        <input type="checkbox" id="node-input-streaming" style="display: inline-block; width: auto; vertical-align: top;">
-    </div>
-    <div class="form-row stream-options">
-        <label for="node-input-streamChunkSize"><i class="fa fa-bars"></i> Chunk Size</label>
-        <input type="number" id="node-input-streamChunkSize" placeholder="1" style="width: 100px;">
-        <span class="form-tips">Number of rows per output message.</span>
-    </div>
+    <div class="form-row"> <label for="node-input-streaming" style="width: auto;"><i class="fa fa-arrows-v"></i> Stream Results</label> <input type="checkbox" id="node-input-streaming" style="display: inline-block; width: auto; vertical-align: top;"> </div>
+    <div class="form-row stream-options"> <label for="node-input-streamChunkSize"><i class="fa fa-bars"></i> Chunk Size</label> <input type="number" id="node-input-streamChunkSize" placeholder="1" style="width: 100px;"> <span class="form-tips">Number of rows per output message.</span> </div>
 </script>
 
 
 <script type="text/markdown" data-help-name="odbc config">
 A configuration node that manages the connection to your database.
-
 ### Connection Modes
 Version 2.0 introduces two ways to configure your connection:
-
 #### 1. Structured Fields Mode (Recommended)
 This is the easiest and most secure way to set up a connection for common databases.
 - **Database Type**: Select your database (e.g., SQL Server, PostgreSQL, MySQL). The node will use the appropriate driver name and connection string syntax. For unlisted databases, choose "Other" and provide the driver name manually.
@@ -400,49 +328,49 @@ This is the easiest and most secure way to set up a connection for common databa
 - **Database**: The name of the database to connect to (optional).
 - **User**: The username for authentication.
 - **Password**: The password for authentication. This is stored securely using Node-RED's credential system.
-
 #### 2. Connection String Mode (Advanced)
 This mode gives you full control for complex or non-standard connection strings.
 - **Connection String**: Enter the complete ODBC connection string. It is your responsibility to provide a valid string for your driver.
 
 ### Test Connection
 A **Test Connection** button in the configuration panel allows you to instantly verify your settings without deploying the flow.
+> **Note:** For security reasons, passwords are not reloaded into the editor. If your connection requires a password, you must **re-enter it** in the password field before clicking the test button (in Structured Mode). For Connection String mode, ensure the full string (including password if needed) is present in the connection string field itself.
 
-### Pool Options
-- **`initialSize`**: The number of connections to create when the pool is initialized. Default: 5.
-- **`maxSize`**: The maximum number of connections allowed in the pool. Default: 15.
-- (See `odbc` package documentation for more details on pool options).
+### Pool & Connection Options
+- **`Initial Pool Size`**: The number of connections to create when the pool is initialized. Default: 5.
+- **`Increment Pool Size`**: The number of connections to create when the pool is exhausted. Default: 5.
+- **`Max Pool Size`**: The maximum number of connections allowed in the pool. Default: 15.
+- **`Shrink Pool`**: If checked, reduces the number of connections to `Initial Pool Size` when they are returned to the pool if the pool has grown. Default: true.
+- **`Idle Timeout`**: The number of seconds for a connection in the pool to remain idle before closing. Default: 3 seconds.
+- **`Login Timeout`**: The number of seconds for an attempt to establish a new connection to succeed. Default: 5 seconds.
+- **`Query Timeout`**: The number of seconds for a query to execute before timing out. A value of **0** means infinite or uses the driver/database default. Default: 0 seconds.
 
 ### Error Handling & Retry
-- **`retryFreshConnection`**: If a query fails, the node will retry once with a brand new connection. If this succeeds, the entire connection pool is reset to clear any stale connections.
-- **`retryDelay`**: If both attempts fail, this sets a delay in seconds before another retry is attempted. A value of **0** disables further automatic retries.
-- **`retryOnMsg`**: If the node is waiting for a timed retry, a new incoming message can override the timer and trigger an immediate retry.
+- **`Retry with fresh connection`**: If a query fails using a connection from the pool, the node will try once more with a brand new, direct connection. If this succeeds, the entire connection pool is reset to clear any potentially stale connections.
+- **`Retry Delay`**: If all immediate attempts (pooled and, if enabled, fresh connection) fail, this sets a delay in seconds before another retry is attempted for the incoming message. A value of **0** disables this timed retry mechanism.
+- **`Retry on new message`**: If the node is waiting for a timed retry (due to `Retry Delay`), a new incoming message can, if this is checked, override the timer and trigger an immediate retry of the *original* message that failed.
 
 ### Advanced
 - **`syntaxChecker`**: If activated, the query string will be parsed and appended to the output message at `msg.parsedQuery`.
+- **`Syntax`**: The SQL dialect to use for the syntax checker (e.g., mysql, postgresql, etc.).
 </script>
 
 <script type="text/markdown" data-help-name="odbc">
 Executes a query against a configured ODBC data source.
 
 ### Inputs
-
 - **Query Source** (optional): Specify where to get the query string from. You can use a message property (`msg.`), flow context (`flow.`), global context (`global.`), an environment variable (`env.`), or a JSONata expression. If the source is empty or not found, the node will use the query from the "Query (fallback)" editor below.
   - *Default behavior (for backward compatibility): `msg.query`*
-
 - **Parameters Source** (optional): Specify where to get the parameters for a prepared statement. This should resolve to an array of values.
   - *Default behavior (for backward compatibility): `msg.parameters`*
 
 ### Properties
-
 - **Connection**: The `odbc config` node to use.
-- **Query (fallback)**: A static SQL query to run if the "Query (fallback)" does not provide one. Can contain Mustache syntax (e.g., `{{{payload.id}}}`).
+- **Query (fallback)**: A static SQL query to run if the "Query Source" does not provide one. Can contain Mustache syntax (e.g., `{{{payload.id}}}`).
 - **Result to**: The `msg` property where the query result will be stored. Default: `payload`.
 
 ### Streaming Results
-
-For queries that return a large number of rows, streaming prevents high memory usage by sending multiple messages instead of one large one.
-
+For queries that return a large number of rows, streaming prevents high memory usage.
 - **`Stream Results`**: Enables or disables streaming mode.
 - **`Chunk Size`**: The number of rows to include in each output message. A value of `1` means one message will be sent for every single row.
 
@@ -450,14 +378,13 @@ For queries that return a large number of rows, streaming prevents high memory u
 When streaming is active, the node sends messages in sequence:
 
 1.  **Data Messages**: One or more messages where the payload (or the configured output property) contains an array of rows for the current chunk. For these messages, `msg.odbc_stream.complete` will be **`false`**.
-
 2.  **Completion Message**: A single, final message indicating the end of the stream. For this message:
-    -   The payload will be an **empty array `[]`**.
+    -   The payload (or configured output property) will be an **empty array `[]`**.
     -   `msg.odbc_stream.complete` will be **`true`**.
 
 The `msg.odbc_stream` object contains metadata for tracking:
--   `index`: The starting index of the current chunk. For the completion message, this will be the total number of rows processed.
--   `count`: The number of rows in the chunk. This will be `0` for the completion message.
+-   `index`: The starting index of the current chunk (0-based). For the completion message, this will be the total number of data rows processed.
+-   `count`: The number of rows in the current chunk. This will be `0` for the completion message.
 -   `complete`: The boolean flag (`true`/`false`).
 
 This pattern ensures you can reliably trigger a final action (like closing a file or calculating an aggregate) only when the message with `complete: true` is received.
