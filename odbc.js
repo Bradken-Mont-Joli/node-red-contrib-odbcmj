@@ -15,7 +15,7 @@ module.exports = function (RED) {
         if (isNaN(this.config.queryTimeoutSeconds) || this.config.queryTimeoutSeconds < 0) {
             this.config.queryTimeoutSeconds = 0; 
         }
-        this.closeOperationTimeout = 10000;
+        this.closeOperationTimeout = 10000; // 10 secondes
 
         this._buildConnectionString = function() {
             if (this.config.connectionMode === 'structured') {
@@ -131,12 +131,33 @@ module.exports = function (RED) {
     RED.nodes.registerType("odbc config", poolConfig, { credentials: { password: { type: "password" } } });
 
     RED.httpAdmin.post("/odbc_config/:id/test", RED.auth.needsPermission("odbc.write"), async function(req, res) {
-        // ... (Logique du testeur de connexion - INCHANGÉE par rapport à votre dernière version)
         const tempConfig = req.body;
-        const buildTestConnectionString = () => { /* ... */ }; // Définition interne
+        const buildTestConnectionString = () => {
+            if (tempConfig.connectionMode === 'structured') {
+                if (!tempConfig.dbType || !tempConfig.server) { throw new Error("En mode structuré, le type de base de données et le serveur sont requis."); }
+                let driver;
+                let parts = [];
+                switch (tempConfig.dbType) {
+                    case 'sqlserver': driver = 'ODBC Driver 17 for SQL Server'; break;
+                    case 'postgresql': driver = 'PostgreSQL Unicode'; break;
+                    case 'mysql': driver = 'MySQL ODBC 8.0 Unicode Driver'; break;
+                    default: driver = tempConfig.driver || ''; break;
+                }
+                if(driver) parts.unshift(`DRIVER={${driver}}`);
+                parts.push(`SERVER=${tempConfig.server}`);
+                if (tempConfig.database) parts.push(`DATABASE=${tempConfig.database}`);
+                if (tempConfig.user) parts.push(`UID=${tempConfig.user}`);
+                if (tempConfig.password) parts.push(`PWD=${tempConfig.password}`);
+                return parts.join(';');
+            } else {
+                let connStr = tempConfig.connectionString || "";
+                if (!connStr) { throw new Error("La chaîne de connexion ne peut pas être vide."); }
+                return connStr;
+            }
+        };
         let connection;
         try {
-            const testConnectionString = buildTestConnectionString(); // Utilise la définition interne
+            const testConnectionString = buildTestConnectionString();
             const connectionOptions = { connectionString: testConnectionString, loginTimeout: 10 };
             connection = await odbcModule.connect(connectionOptions);
             res.sendStatus(200);
@@ -156,12 +177,10 @@ module.exports = function (RED) {
         this.isAwaitingRetry = false;
         this.retryTimer = null;
         this.cursorCloseOperationTimeout = 5000;
-        this.currentQueryForErrorContext = null; // Pour stocker la requête lors du traitement
-        this.currentParamsForErrorContext = null; // Pour stocker les paramètres lors du traitement
-
+        this.currentQueryForErrorContext = null; 
+        this.currentParamsForErrorContext = null;
 
         this.enhanceError = (error, query, params, defaultMessage = "Query error") => {
-            // Utilise this.currentQueryForErrorContext et this.currentParamsForErrorContext s'ils sont définis
             const q = query || this.currentQueryForErrorContext;
             const p = params || this.currentParamsForErrorContext;
             const queryContext = (() => {
@@ -185,27 +204,156 @@ module.exports = function (RED) {
             return finalError;
         };
 
-        this.executeQueryAndProcess = async (dbConnection, queryString, queryParams, msg) => { /* ... (inchangé) ... */ };
-        this.executeStreamQuery = async (dbConnection, queryString, queryParams, msg, send) => { /* ... (inchangé) ... */ };
+        this.executeQueryAndProcess = async (dbConnection, queryString, queryParams, msg) => {
+            const result = await dbConnection.query(queryString, queryParams);
+            if (typeof result === "undefined") { throw new Error("Query returned undefined."); }
+            const newMsg = RED.util.cloneMessage(msg);
+            const outputProperty = this.config.outputObj || "payload";
+            const otherParams = {};
+            let actualDataRows = [];
+            if (result !== null && typeof result === "object") {
+                if (Array.isArray(result)) {
+                    actualDataRows = result.map(row => (typeof row === 'object' && row !== null) ? { ...row } : row);
+                    for (const [key, value] of Object.entries(result)) {
+                        if (isNaN(parseInt(key))) { otherParams[key] = value; }
+                    }
+                } else {
+                    for (const [key, value] of Object.entries(result)) { otherParams[key] = value; }
+                }
+            }
+            const columnMetadata = otherParams.columns;
+            if (Array.isArray(columnMetadata) && Array.isArray(actualDataRows) && actualDataRows.length > 0) {
+                const sqlBitColumnNames = new Set();
+                columnMetadata.forEach(col => { if (col && typeof col.name === "string" && col.dataTypeName === "SQL_BIT") sqlBitColumnNames.add(col.name); });
+                if (sqlBitColumnNames.size > 0) {
+                    actualDataRows.forEach(row => {
+                        if (typeof row === "object" && row !== null) {
+                            for (const columnName of sqlBitColumnNames) {
+                                if (row.hasOwnProperty(columnName)) {
+                                    const value = row[columnName];
+                                    if (value === "1" || value === 1) row[columnName] = true;
+                                    else if (value === "0" || value === 0) row[columnName] = false;
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+            objPath.set(newMsg, outputProperty, actualDataRows);
+            if (Object.keys(otherParams).length) newMsg.odbc = otherParams;
+            return newMsg;
+        };
+        
+        this.executeStreamQuery = async (dbConnection, queryString, queryParams, msg, send) => {
+            const chunkSize = parseInt(this.config.streamChunkSize) || 1;
+            const fetchSize = chunkSize > 100 ? 100 : chunkSize; 
+            let cursor;
+            try {
+                cursor = await dbConnection.query(queryString, queryParams, { cursor: true, fetchSize: fetchSize });
+                this.status({ fill: "blue", shape: "dot", text: "streaming rows..." });
+                let rowCount = 0;
+                let chunk = [];
+                while (true) {
+                    const rows = await cursor.fetch(); 
+                    if (!rows || rows.length === 0) break;
+                    for (const row of rows) {
+                        rowCount++;
+                        const cleanRow = (typeof row === 'object' && row !== null) ? { ...row } : row;
+                        chunk.push(cleanRow);
+                        if (chunk.length >= chunkSize) {
+                            const newMsg = RED.util.cloneMessage(msg);
+                            objPath.set(newMsg, this.config.outputObj || "payload", chunk);
+                            newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: false };
+                            send(newMsg);
+                            chunk = [];
+                        }
+                    }
+                }
+                if (chunk.length > 0) {
+                    const newMsg = RED.util.cloneMessage(msg);
+                    objPath.set(newMsg, this.config.outputObj || "payload", chunk);
+                    newMsg.odbc_stream = { index: rowCount - chunk.length, count: chunk.length, complete: false };
+                    send(newMsg);
+                }
+                const finalMsg = RED.util.cloneMessage(msg);
+                objPath.set(finalMsg, this.config.outputObj || "payload", []);
+                finalMsg.odbc_stream = { index: rowCount, count: 0, complete: true };
+                send(finalMsg);
+                this.status({ fill: "green", shape: "dot", text: `success (${rowCount} rows)` });
+            } finally {
+                if (cursor) {
+                    try {
+                        await Promise.race([
+                            cursor.close(),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error('Cursor close timeout')), this.cursorCloseOperationTimeout))
+                        ]);
+                    } catch (cursorCloseError) { this.warn(`Error or timeout closing cursor: ${cursorCloseError.message}`); }
+                }
+            }
+        };
 
-        // NOUVELLE fonction utilitaire
-        async function testBasicConnectivity(connection, nodeInstance) {
+        this.testBasicConnectivity = async function(connection) {
             if (!connection || typeof connection.query !== 'function') {
-                nodeInstance.warn("Test de connectivité basique : connexion invalide fournie.");
+                this.warn("Test de connectivité basique : connexion invalide fournie.");
                 return false;
             }
+            let originalTimeout;
             try {
-                const originalTimeout = connection.queryTimeout;
-                connection.queryTimeout = 5; // Court timeout pour un SELECT 1
-                await connection.query("SELECT 1"); // Ou équivalent SGBD
-                connection.queryTimeout = originalTimeout;
-                nodeInstance.log("Test de connectivité basique (SELECT 1) : Réussi.");
+                originalTimeout = connection.queryTimeout;
+                connection.queryTimeout = 5; 
+                await connection.query("SELECT 1");
+                this.log("Test de connectivité basique (SELECT 1) : Réussi.");
                 return true;
             } catch (testError) {
-                nodeInstance.warn(`Test de connectivité basique (SELECT 1) : Échoué - ${testError.message}`);
+                this.warn(`Test de connectivité basique (SELECT 1) : Échoué - ${testError.message}`);
                 return false;
+            } finally {
+                if (typeof originalTimeout !== 'undefined' && connection && typeof connection.query === 'function') {
+                    try { connection.queryTimeout = originalTimeout; } 
+                    catch(e) { this.warn("Impossible de restaurer le queryTimeout original après le test de connectivité.")}
+                }
             }
-        }
+        };
+
+        this.getRenderedQueryAndParams = async function(msg) {
+            const querySourceType = this.config.querySourceType || 'msg';
+            const querySource = this.config.querySource || 'query';
+            const paramsSourceType = this.config.paramsSourceType || 'msg';
+            const paramsSource = this.config.paramsSource || 'parameters';
+            
+            this.currentParamsForErrorContext = await new Promise(resolve => RED.util.evaluateNodeProperty(paramsSource, paramsSourceType, this, msg, (err, val) => resolve(err ? undefined : val)));
+            this.currentQueryForErrorContext = await new Promise(resolve => RED.util.evaluateNodeProperty(querySource, querySourceType, this, msg, (err, val) => resolve(err ? undefined : (val || this.config.query || ""))));
+            
+            if (!this.currentQueryForErrorContext) {
+                throw new Error("No query to execute. Please provide a query in the node's configuration or via msg." + (querySourceType === 'msg' ? querySource : 'querySource (non-msg)'));
+            }
+
+            let finalQuery = this.currentQueryForErrorContext;
+            const isPreparedStatement = this.currentParamsForErrorContext || (finalQuery && finalQuery.includes("?"));
+            if (!isPreparedStatement && finalQuery) {
+                finalQuery = mustache.render(finalQuery, msg);
+            }
+            return { query: finalQuery, params: this.currentParamsForErrorContext };
+        };
+
+        this.executeUserQuery = async function(connection, query, params, msg, send) {
+            const configuredTimeout = parseInt(this.poolNode.config.queryTimeoutSeconds, 10);
+            if (configuredTimeout > 0) {
+                try { connection.queryTimeout = configuredTimeout; } 
+                catch (e) { this.warn(`Could not set queryTimeout on connection: ${e.message}`); }
+            } else {
+                 connection.queryTimeout = 0; 
+            }
+            
+            this.status({ fill: "blue", shape: "dot", text: "executing..." });
+            if (this.config.streaming) {
+                await this.executeStreamQuery(connection, query, params, msg, send);
+            } else {
+                const newMsg = await this.executeQueryAndProcess(connection, query, params, msg);
+                this.status({ fill: "green", shape: "dot", text: "success" });
+                send(newMsg);
+            }
+        };
 
         this.on("input", async (msg, send, done) => {
             this.currentQueryForErrorContext = null; 
@@ -225,75 +373,53 @@ module.exports = function (RED) {
 
             if (!this.poolNode) {
                 this.status({ fill: "red", shape: "ring", text: "No config node" });
-                return done(new Error("ODBC Config node not properly configured."));
+                return done(this.enhanceError(new Error("ODBC Config node not properly configured.")));
             }
-    
-            const getRenderedQueryAndParams = async () => {
-                const querySourceType = this.config.querySourceType || 'msg';
-                const querySource = this.config.querySource || 'query';
-                const paramsSourceType = this.config.paramsSourceType || 'msg';
-                const paramsSource = this.config.paramsSource || 'parameters';
-                
-                this.currentParamsForErrorContext = await new Promise(resolve => RED.util.evaluateNodeProperty(paramsSource, paramsSourceType, this, msg, (err, val) => resolve(err ? undefined : val)));
-                this.currentQueryForErrorContext = await new Promise(resolve => RED.util.evaluateNodeProperty(querySource, querySourceType, this, msg, (err, val) => resolve(err ? undefined : (val || this.config.query || ""))));
-                
-                if (!this.currentQueryForErrorContext) throw new Error("No query to execute");
 
-                let finalQuery = this.currentQueryForErrorContext;
-                const isPreparedStatement = this.currentParamsForErrorContext || (finalQuery && finalQuery.includes("?"));
-                if (!isPreparedStatement && finalQuery) {
-                    finalQuery = mustache.render(finalQuery, msg);
-                }
-                return { query: finalQuery, params: this.currentParamsForErrorContext };
-            };
-
-            const executeUserQuery = async (connection, query, params) => {
-                // Appliquer le queryTimeout configuré
-                const configuredTimeout = parseInt(this.poolNode.config.queryTimeoutSeconds, 10);
-                if (configuredTimeout > 0) {
-                    try { connection.queryTimeout = configuredTimeout; } 
-                    catch (e) { this.warn(`Could not set queryTimeout on connection: ${e.message}`); }
-                } else {
-                     connection.queryTimeout = 0; // Infini ou défaut driver
-                }
-                
-                this.status({ fill: "blue", shape: "dot", text: "executing..." });
-                if (this.config.streaming) {
-                    await this.executeStreamQuery(connection, query, params, msg, send);
-                } else {
-                    const newMsg = await this.executeQueryAndProcess(connection, query, params, msg);
-                    this.status({ fill: "green", shape: "dot", text: "success" });
-                    send(newMsg);
-                }
-            };
-    
-            let activeConnection = null; // Pour gérer la connexion active (pool ou fraîche)
+            let queryToExecute;
+            let paramsToExecute;
+            try {
+                const queryData = await this.getRenderedQueryAndParams(msg);
+                queryToExecute = queryData.query;
+                paramsToExecute = queryData.params;
+            } catch (inputValidationError) {
+                this.status({ fill: "red", shape: "ring", text: "Input Error" });
+                return done(this.enhanceError(inputValidationError)); 
+            }
+            
+            let activeConnection = null; 
+            let errorForUser = null; 
             let shouldProceedToTimedRetry = false;
-            let errorForTimedRetry = null;
-    
-            try { // Tentative Principale (avec connexion du pool)
-                const { query, params } = await getRenderedQueryAndParams();
-                
+
+            try { 
                 this.status({ fill: "yellow", shape: "dot", text: "connecting (pool)..." });
                 activeConnection = await this.poolNode.connect();
-                await executeUserQuery(activeConnection, query, params);
+                await this.executeUserQuery(activeConnection, queryToExecute, paramsToExecute, msg, send);
                 
-                if (activeConnection) { await activeConnection.close(); activeConnection = null; }
-                return done();
+                done(); 
+                
+                if (activeConnection) { 
+                    try { await activeConnection.close(); } catch(e) { this.warn("Error closing pool connection after success: " + e.message); }
+                    activeConnection = null; 
+                }
+                return; 
 
-            } catch (initialError) {
-                this.warn(`Initial attempt failed: ${initialError.message}`);
-                if (activeConnection) { // Si la connexion a été obtenue mais que executeUserQuery a échoué
-                    const connStillGood = await testBasicConnectivity(activeConnection, this);
-                    try { await activeConnection.close(); activeConnection = null; } catch(e){this.warn("Error closing pool conn after initial error: "+e.message);}
+            } catch (initialDbError) {
+                this.warn(`Initial DB attempt failed: ${initialDbError.message}`);
+                // Garder la requête originale pour le contexte d'erreur, même si une erreur de connexion se produit
+                // this.currentQueryForErrorContext et this.currentParamsForErrorContext sont déjà settés par getRenderedQueryAndParams
+
+                if (activeConnection) { 
+                    const connStillGood = await this.testBasicConnectivity(activeConnection);
+                    try { await activeConnection.close(); activeConnection = null; } 
+                    catch(e){ this.warn("Error closing pool conn after initial error: "+e.message); activeConnection = null; }
                     
-                    if (connStillGood) { // La connexion est bonne, l'erreur vient de la requête utilisateur
+                    if (connStillGood) { 
                         this.status({ fill: "red", shape: "ring", text: "SQL error" });
-                        return done(this.enhanceError(initialError, this.currentQueryForErrorContext, this.currentParamsForErrorContext, "SQL Query Error"));
+                        return done(this.enhanceError(initialDbError)); 
                     }
                 }
-                // Si on arrive ici, la connexion poolée a eu un problème (soit pour se connecter, soit SELECT 1 a échoué)
-
+                
                 if (this.poolNode.config.retryFreshConnection) {
                     this.warn("Attempting retry with a fresh connection.");
                     this.status({ fill: "yellow", shape: "dot", text: "Retrying (fresh)..." });
@@ -302,47 +428,50 @@ module.exports = function (RED) {
                         activeConnection = await odbcModule.connect(freshConnectConfig);
                         this.log("Fresh connection established.");
 
-                        const freshConnGood = await testBasicConnectivity(activeConnection, this);
+                        const freshConnGood = await this.testBasicConnectivity(activeConnection);
                         if (!freshConnGood) {
-                            // Erreur de connectivité même sur une connexion fraîche
-                            errorForTimedRetry = this.enhanceError(new Error("Basic connectivity (SELECT 1) failed on fresh connection."), this.currentQueryForErrorContext, this.currentParamsForErrorContext, "Fresh Connection Test Failed");
+                            errorForUser = this.enhanceError(new Error("Basic connectivity (SELECT 1) failed on fresh connection."), null, null, "Fresh Connection Test Failed");
                             shouldProceedToTimedRetry = true;
-                            throw errorForTimedRetry; // Va au catch externe de ce bloc try-fresh
+                            throw errorForUser; 
                         }
                         
-                        // La connexion fraîche est bonne, on retente la requête utilisateur originale
-                        const { query, params } = await getRenderedQueryAndParams(); // Re-préparer au cas où
-                        await executeUserQuery(activeConnection, query, params);
+                        await this.executeUserQuery(activeConnection, queryToExecute, paramsToExecute, msg, send);
                         
                         this.log("Query successful with fresh connection. Resetting pool.");
+                        done();
+                        
                         await this.poolNode.resetPool();
-                        if (activeConnection) { await activeConnection.close(); activeConnection = null; }
-                        return done(); // Succès !
+                        if (activeConnection) { 
+                            try { await activeConnection.close(); } catch(e) { this.warn("Error closing fresh connection after success: " + e.message); }
+                            activeConnection = null; 
+                        }
+                        return; 
 
                     } catch (freshErrorOrConnectivityFail) {
-                        // Soit odbcModule.connect a échoué, soit SELECT 1 a échoué (et errorForTimedRetry est déjà setté),
-                        // soit executeUserQuery sur la connexion fraîche a échoué.
                         if (activeConnection) { try { await activeConnection.close(); activeConnection = null; } catch(e){this.warn("Error closing fresh conn after error: "+e.message);} }
                         
-                        if (shouldProceedToTimedRetry) { // Signifie que SELECT 1 sur la connexion fraîche a échoué
-                            // errorForTimedRetry est déjà setté
+                        if (shouldProceedToTimedRetry) { 
+                            // errorForUser a été setté par l'échec du SELECT 1 sur la connexion fraîche
                         } else { 
-                            // SELECT 1 sur connexion fraîche a réussi, mais la requête utilisateur a échoué. C'est une erreur SQL.
                             this.status({ fill: "red", shape: "ring", text: "SQL error (on retry)" });
-                            return done(this.enhanceError(freshErrorOrConnectivityFail, this.currentQueryForErrorContext, this.currentParamsForErrorContext, "SQL Query Error (on fresh connection)"));
+                            return done(this.enhanceError(freshErrorOrConnectivityFail));
                         }
                     }
-                } else { // Pas de retryFreshConnection configuré, l'erreur initiale était donc un problème de connexion.
-                    errorForTimedRetry = this.enhanceError(initialError, this.currentQueryForErrorContext, this.currentParamsForErrorContext, "Connection Error");
+                } else { 
+                    errorForUser = this.enhanceError(initialDbError, null, null, "Connection Error (no fresh retry)");
                     shouldProceedToTimedRetry = true;
                 }
             }
             
-            // Logique de Retry Temporisé
-            if (shouldProceedToTimedRetry && errorForTimedRetry) {
+            if (activeConnection) { // Sécurité supplémentaire pour fermer une connexion si elle est restée active
+                try { await activeConnection.close(); } catch(e) { this.warn("Final cleanup: Error closing activeConnection: " + e.message); }
+                activeConnection = null;
+            }
+            
+            if (shouldProceedToTimedRetry && errorForUser) {
                 const retryDelaySeconds = parseInt(this.poolNode.config.retryDelay, 10);
                 if (retryDelaySeconds > 0) {
-                    this.warn(`Connection issue suspected. Scheduling retry in ${retryDelaySeconds} seconds. Error: ${errorForTimedRetry.message}`);
+                    this.warn(`Connection issue. Scheduling retry in ${retryDelaySeconds}s. Error: ${errorForUser.message}`);
                     this.status({ fill: "red", shape: "ring", text: `Retry in ${retryDelaySeconds}s...` });
                     this.isAwaitingRetry = true;
                     this.retryTimer = setTimeout(() => {
@@ -350,17 +479,17 @@ module.exports = function (RED) {
                         this.log(`Retry timer expired. Re-emitting message for node ${this.id || this.name}.`);
                         this.receive(msg); 
                     }, retryDelaySeconds * 1000);
-                    return done(); // Termine l'invocation actuelle du message
-                } else { // Pas de délai de retry, ou délai à 0
+                    return done(); 
+                } else { 
                     this.status({ fill: "red", shape: "ring", text: "Connection Error" });
-                    return done(errorForTimedRetry);
+                    return done(errorForUser);
                 }
-            } else if (errorForTimedRetry) { // Une erreur SQL a été identifiée et ne doit pas déclencher de retry de connexion
-                 this.status({ fill: "red", shape: "ring", text: "Error (No Retry)" });
-                 return done(errorForTimedRetry); // Devrait déjà avoir été fait
+            } else if (errorForUser) { 
+                 this.status({ fill: "red", shape: "ring", text: "Error (No Timed Retry)" });
+                 return done(errorForUser); // Cas où c'est une erreur SQL identifiée, pas de retry temporisé.
             } else {
-                 // Normalement, on ne devrait pas arriver ici si done() a été appelé après un succès.
-                 this.log("[ODBC Node] DEBUG: Reached end of on('input') without error or prior done(). Calling done().");
+                 // Ce chemin ne devrait pas être atteint si done() a été appelé dans un chemin de succès.
+                 this.log("[ODBC Node] DEBUG: Reached unexpected end of on('input') path. Calling done().");
                  return done();
             }
         });
