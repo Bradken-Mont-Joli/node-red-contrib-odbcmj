@@ -1,6 +1,6 @@
 # Node-RED Contrib ODBC MJ
 
-A powerful and robust Node-RED node to connect to any ODBC data source. It features connection pooling, advanced retry logic, secure credential management, dynamic query sources, and result set streaming.
+A powerful and robust Node-RED node to connect to any ODBC data source. It features connection pooling, advanced retry logic, secure credential management, dynamic query sources, result set streaming, and configurable timeouts.
 
 This node is a fork with significant enhancements to provide stability and advanced features for enterprise use cases.
 
@@ -11,10 +11,11 @@ This node is a fork with significant enhancements to provide stability and advan
 -   **Secure Credential Storage**: Passwords are saved using Node-RED's built-in credential system.
 -   **Connection Tester**: Instantly validate your connection settings from the configuration panel.
 -   **Dynamic Inputs**: Source your SQL query and parameters from message properties, flow/global context, or environment variables.
--   **Advanced Retry Logic**: Automatically handles connection errors with configurable delays and retries to ensure flow resilience.
--   **Result Streaming**: Process queries with millions of rows without exhausting memory by streaming results as chunks.
+-   **Intelligent Error Handling & Retry Logic**: Differentiates between SQL errors and actual connection problems. Automatically handles connection errors with configurable delays and retries to ensure flow resilience.
+-   **Result Streaming**: Process queries with millions of rows without exhausting memory by streaming results as chunks, with a clear completion signal.
+-   **Configurable Timeouts**: Set timeouts for login, query execution, and internal close operations to prevent hangs.
+-   **Optional Fast Shutdown**: Provides a "fire-and-forget" option for pool closing to handle problematic drivers during Node-RED shutdown/deploy.
 -   **Syntax Checker**: Optionally parse the SQL query to validate its structure.
--   **Query Timeout**: Configure a timeout for query execution to prevent indefinite hangs.
 
 ---
 
@@ -25,8 +26,6 @@ This node is a fork with significant enhancements to provide stability and advan
 A configuration node that manages the connection to your database.
 
 #### Connection Modes
-
-Version 2.0 introduces two ways to configure your connection:
 
 ##### 1. Structured Fields Mode (Recommended)
 
@@ -55,15 +54,25 @@ A **Test Connection** button in the configuration panel allows you to instantly 
 -   **`Increment Pool Size`** `<number>` (optional): The number of connections to create when the pool is exhausted. Default: 5.
 -   **`Max Pool Size`** `<number>` (optional): The maximum number of connections allowed in the pool. Default: 15.
 -   **`Shrink Pool`** `<boolean>` (optional): If checked, reduces the number of connections to `Initial Pool Size` when they are returned to the pool if the pool has grown. Default: true.
--   **`Idle Timeout`** `<number>` (optional): The number of seconds for a connection in the pool to remain idle before closing. Default: 3 seconds. (Refers to the `connectionTimeout` property of the `odbc` library's pool options).
+-   **`Idle Timeout`** `<number>` (optional): The number of seconds for a connection in the pool to remain idle before closing. Default: 3 seconds. (Refers to the `connectionTimeout` property of the `odbc` library's pool options, converted to seconds).
 -   **`Login Timeout`** `<number>` (optional): The number of seconds for an attempt to establish a new connection to succeed. Default: 5 seconds.
 -   **`Query Timeout`** `<number>` (optional): The number of seconds for a query to execute before timing out. A value of **0** means infinite or uses the driver/database default. Default: 0 seconds.
 
 #### Error Handling & Retry
 
--   **`Retry with fresh connection`** `<boolean>` (optional): If a query fails using a connection from the pool, the node will try once more with a brand new, direct connection. If this succeeds, the entire connection pool is reset to clear any potentially stale connections. Default: false.
--   **`Retry Delay`** `<number>` (optional): If all immediate attempts (pooled and, if enabled, fresh connection) fail, this sets a delay in seconds before another retry is attempted for the incoming message. A value of **0** disables this timed retry mechanism. Default: 5.
--   **`Retry on new message`** `<boolean>` (optional): If the node is waiting for a timed retry (due to `Retry Delay`), a new incoming message can, if this is checked, override the timer and trigger an immediate retry of the *original* message that failed. Default: true.
+The node attempts to distinguish between errors related to the SQL query itself (syntax, permissions) and actual connection problems. Connection retry mechanisms are primarily invoked for suspected connection issues.
+
+-   **`Retry with fresh connection`** `<boolean>` (optional): If a query fails and a basic connectivity test (e.g., `SELECT 1`) also suggests a problem with the current pooled connection, the node will try once more with a brand new, direct connection. If this second attempt (including its own successful basic connectivity test followed by the user's query) succeeds, the entire connection pool is reset to clear any potentially stale connections. Default: false.
+-   **`Retry Delay`** `<number>` (optional): If all immediate attempts fail and the problem is diagnosed as a *connection issue* (e.g., the `SELECT 1` test fails on both pooled and fresh connections), this sets a delay in seconds before another attempt to process the incoming message is made (using the pool again). A value of **0** disables this timed retry mechanism for connection issues. Default: 5.
+-   **`Retry on new message`** `<boolean>` (optional): If the node is waiting for a timed retry (due to `Retry Delay` for a connection issue), a new incoming message can, if this is checked, override the timer and trigger an immediate retry of the *original* message that failed. Default: true.
+
+#### Shutdown Options
+
+-   **`Fast close (Fire-and-forget)`** `<boolean>` (optional):
+    -   **Warning:** When checked, Node-RED will not wait for the connection pool to properly close during a deploy or shutdown.
+    -   This option can prevent Node-RED from hanging if specific ODBC drivers have issues closing connections quickly.
+    -   However, enabling this may result in orphaned connections on the database server, potentially consuming server resources.
+    -   It is recommended to leave this unchecked unless you are experiencing hangs during Node-RED deploys or shutdowns related to this config node. Default: false.
 
 #### Advanced
 
@@ -98,8 +107,8 @@ To make the node highly flexible, the SQL query and its parameters can be source
 
 For queries that return a large number of rows, streaming prevents high memory usage.
 
--   **`Stream Results`** `<boolean>`: Enables or disables streaming mode. When enabled, the node will output multiple messages, one for each chunk of rows. Default: false.
--   **`Chunk Size`** `<number>`: The number of rows to include in each output message. A value of `1` means one message will be sent for every single row. Default: 1.
+-   **`Stream Results`** `<boolean>`: Enables or disables streaming mode. When enabled, the node will output multiple messages. Default: false.
+-   **`Chunk Size`** `<number>`: When streaming, this is the number of rows to include in each data message. A value of `1` means one message will be sent for every single row. Default: 1.
 
 ##### Streaming Output Format
 

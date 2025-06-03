@@ -17,6 +17,9 @@ module.exports = function (RED) {
         }
         this.closeOperationTimeout = 10000; // 10 secondes
 
+        // NOUVEAU: Récupérer et s'assurer que l'option fireAndForgetOnClose est un booléen
+        this.config.fireAndForgetOnClose = config.fireAndForgetOnClose === true;
+
         this._buildConnectionString = function() {
             if (this.config.connectionMode === 'structured') {
                 if (!this.config.dbType || !this.config.server) {
@@ -33,8 +36,13 @@ module.exports = function (RED) {
                 if(driver) parts.unshift(`DRIVER={${driver}}`);
                 parts.push(`SERVER=${this.config.server}`);
                 if (this.config.database) parts.push(`DATABASE=${this.config.database}`);
-                if (this.config.user) parts.push(`UID=${this.config.user}`);
-                if (this.credentials && this.credentials.password) parts.push(`PWD=${this.credentials.password}`);
+                
+                if (this.config.user) { 
+                    parts.push(`UID=${this.config.user}`);
+                    if (this.credentials && typeof this.credentials.password === 'string') {
+                        parts.push(`PWD=${this.credentials.password}`);
+                    }
+                }
                 return parts.join(';');
             } else {
                 return this.config.connectionString || "";
@@ -110,22 +118,49 @@ module.exports = function (RED) {
             }
         };
 
+        // MODIFIÉ pour inclure l'option fireAndForgetOnClose
         this.on("close", async (removed, done) => {
-            this.log("Closing ODBC config node. Attempting to close pool.");
+            const nodeName = this.name || this.id;
+            this.log(`[${nodeName}] Closing ODBC config node. Pool present: ${!!this.pool}. Fire-and-forget: ${this.config.fireAndForgetOnClose}`);
+    
             if (this.pool) {
-                try {
-                    await Promise.race([
-                        this.pool.close(),
-                        new Promise((_, reject) => setTimeout(() => reject(new Error('Pool close timeout on node close')), this.closeOperationTimeout))
-                    ]);
-                    this.log("Connection pool closed successfully on node close.");
-                } catch (error) {
-                    this.error(`Error or timeout closing connection pool on node close: ${error.message}`, error);
-                } finally {
-                    this.pool = null; 
+                const currentPool = this.pool; 
+                this.pool = null; 
+                this.connecting = false;
+    
+                const closePromise = Promise.race([
+                    currentPool.close(),
+                    new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Pool close timeout')), this.closeOperationTimeout)
+                    )
+                ]);
+    
+                if (this.config.fireAndForgetOnClose) {
+                    this.log(`[${nodeName}] Initiating fire-and-forget pool close. Calling done() immediately.`);
+                    done(); 
+    
+                    closePromise
+                        .then(() => {
+                            this.log(`[${nodeName}] Background fire-and-forget pool close for ${nodeName} completed successfully.`);
+                        })
+                        .catch(error => {
+                            this.error(`[${nodeName}] Background fire-and-forget pool close for ${nodeName} failed or timed out: ${error.message}`, error);
+                        });
+                } else { 
+                    this.log(`[${nodeName}] Awaiting pool close operation...`);
+                    try {
+                        await closePromise;
+                        this.log(`[${nodeName}] Pool close operation completed successfully for ${nodeName}.`);
+                    } catch (error) {
+                        this.error(`[${nodeName}] Pool close operation for ${nodeName} failed or timed out: ${error.message}`, error);
+                    }
+                    this.log(`[${nodeName}] Calling done() after awaiting pool close for ${nodeName}.`);
+                    done();
                 }
+            } else { 
+                this.log(`[${nodeName}] No pool to close. Calling done().`);
+                done();
             }
-            done();
         });
     }
     RED.nodes.registerType("odbc config", poolConfig, { credentials: { password: { type: "password" } } });
@@ -146,8 +181,12 @@ module.exports = function (RED) {
                 if(driver) parts.unshift(`DRIVER={${driver}}`);
                 parts.push(`SERVER=${tempConfig.server}`);
                 if (tempConfig.database) parts.push(`DATABASE=${tempConfig.database}`);
-                if (tempConfig.user) parts.push(`UID=${tempConfig.user}`);
-                if (tempConfig.password) parts.push(`PWD=${tempConfig.password}`);
+                if (tempConfig.user) { 
+                    parts.push(`UID=${tempConfig.user}`);
+                    if (typeof tempConfig.password === 'string') { 
+                        parts.push(`PWD=${tempConfig.password}`);
+                    }
+                }
                 return parts.join(';');
             } else {
                 let connStr = tempConfig.connectionString || "";
@@ -406,9 +445,6 @@ module.exports = function (RED) {
 
             } catch (initialDbError) {
                 this.warn(`Initial DB attempt failed: ${initialDbError.message}`);
-                // Garder la requête originale pour le contexte d'erreur, même si une erreur de connexion se produit
-                // this.currentQueryForErrorContext et this.currentParamsForErrorContext sont déjà settés par getRenderedQueryAndParams
-
                 if (activeConnection) { 
                     const connStillGood = await this.testBasicConnectivity(activeConnection);
                     try { await activeConnection.close(); activeConnection = null; } 
@@ -451,7 +487,7 @@ module.exports = function (RED) {
                         if (activeConnection) { try { await activeConnection.close(); activeConnection = null; } catch(e){this.warn("Error closing fresh conn after error: "+e.message);} }
                         
                         if (shouldProceedToTimedRetry) { 
-                            // errorForUser a été setté par l'échec du SELECT 1 sur la connexion fraîche
+                            // errorForUser est déjà l'erreur de test de connectivité et sera utilisé ci-dessous
                         } else { 
                             this.status({ fill: "red", shape: "ring", text: "SQL error (on retry)" });
                             return done(this.enhanceError(freshErrorOrConnectivityFail));
@@ -463,7 +499,7 @@ module.exports = function (RED) {
                 }
             }
             
-            if (activeConnection) { // Sécurité supplémentaire pour fermer une connexion si elle est restée active
+            if (activeConnection) {
                 try { await activeConnection.close(); } catch(e) { this.warn("Final cleanup: Error closing activeConnection: " + e.message); }
                 activeConnection = null;
             }
@@ -486,10 +522,9 @@ module.exports = function (RED) {
                 }
             } else if (errorForUser) { 
                  this.status({ fill: "red", shape: "ring", text: "Error (No Timed Retry)" });
-                 return done(errorForUser); // Cas où c'est une erreur SQL identifiée, pas de retry temporisé.
+                 return done(errorForUser);
             } else {
-                 // Ce chemin ne devrait pas être atteint si done() a été appelé dans un chemin de succès.
-                 this.log("[ODBC Node] DEBUG: Reached unexpected end of on('input') path. Calling done().");
+                 this.log("[ODBC Node] DEBUG: Reached end of on('input') path. Calling done().");
                  return done();
             }
         });

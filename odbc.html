@@ -17,12 +17,13 @@
             incrementSize: { value: 5, validate: RED.validators.number(true) },
             maxSize: { value: 15, validate: RED.validators.number(true) },
             shrink: { value: true },
-            connectionTimeout: { value: 3, validate: RED.validators.number(true) }, // Idle timeout for connections in pool (odbc lib specific)
-            loginTimeout: { value: 5, validate: RED.validators.number(true) },      // Login timeout for new connections
-            queryTimeoutSeconds: { value: 0, validate: RED.validators.number(true) }, // NOUVEAU: Timeout pour les requêtes
+            connectionTimeout: { value: 3, validate: RED.validators.number(true) }, 
+            loginTimeout: { value: 5, validate: RED.validators.number(true) },      
+            queryTimeoutSeconds: { value: 0, validate: RED.validators.number(true) }, 
             retryFreshConnection: { value: false },
             retryDelay: { value: 5, validate: RED.validators.number(true) },
             retryOnMsg: { value: true },
+            fireAndForgetOnClose: { value: false }, // NOUVELLE OPTION
             syntaxtick: { value: false },
             syntax: { value: "mysql" },
         },
@@ -31,6 +32,11 @@
         },
         oneditprepare: function () {
             var node = this;
+
+            // Initialiser tous les accordéons comme repliés par défaut
+            $('.form-section-content').hide();
+            $('.form-section-header').removeClass('expanded');
+
 
             $('.form-section-header').on('click', function() {
                 $(this).toggleClass('expanded');
@@ -80,9 +86,8 @@
                         RED.notify("Le champ 'Server' est requis pour le test.", {type: "warning", timeout: 3000});
                         return;
                     }
-                    if ($("#node-config-input-password").val() === "" && $("#node-config-input-user").val().trim() !== "") {
-                        RED.notify("Note: Pour tester une connexion structurée avec mot de passe, veuillez le (re)saisir.", {type: "info", timeout: 4500});
-                        // On ne bloque pas, l'utilisateur peut vouloir tester une connexion sans mot de passe si le user est optionnel
+                    if ($("#node-config-input-user").val().trim() !== "" && $("#node-config-input-password").val() === "") {
+                        RED.notify("Test avec utilisateur et mot de passe vide. Si un mot de passe est habituellement requis, veuillez le (re)saisir.", {type: "info", timeout: 4500});
                     }
                 } else { // Mode 'string'
                     var connStr = $("#node-config-input-connectionString").val().trim();
@@ -140,9 +145,10 @@
 
 <style>
     .form-section-header { cursor: pointer; padding: 5px; border-bottom: 1px solid #ddd; margin-bottom: 10px; user-select: none; }
-    .form-section-header i.fa-caret-right { transition: transform 0.2s ease-in-out; }
+    .form-section-header i.fa-caret-right { transition: transform 0.2s ease-in-out; margin-right: 5px; }
     .form-section-header.expanded i.fa-caret-right { transform: rotate(90deg); }
-    .form-section-content { padding-left: 20px; }
+    .form-section-content { padding-left: 20px; /* Sera géré par slideToggle, display:none initialement */ }
+    .form-tips { font-size: smaller; color: #777; display: block; margin-top: 2px; }
 </style>
 
 <script type="text/html" data-template-name="odbc config">
@@ -206,7 +212,7 @@
     <hr/>
     
     <div class="form-section-header"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-sitemap"></i> Pool & Connection Options</h4></div>
-    <div class="form-section-content" style="display: none;">
+    <div class="form-section-content">
         <div class="form-row">
             <label for="node-config-input-initialSize"><i class="fa fa-play"></i> Initial Pool Size</label>
             <input type="number" id="node-config-input-initialSize" placeholder="5" />
@@ -222,19 +228,19 @@
         <div class="form-row">
             <label for="node-config-input-shrink"><i class="fa fa-compress"></i> Shrink Pool</label>
             <input type="checkbox" id="node-config-input-shrink" style="margin-left:0px; vertical-align:top; width:auto !important;" />
-            <span class="form-tips" style="font-size: smaller;">Reduce pool to initial size when connections are returned.</span>
+            <span class="form-tips">Reduce pool to initial size when connections are returned.</span>
         </div>
         <div class="form-row">
             <label for="node-config-input-connectionTimeout"><i class="fa fa-clock-o"></i> Idle Timeout</label>
             <input type="number" id="node-config-input-connectionTimeout" placeholder="3" style="width: 80px;"/>
             <span style="margin-left: 5px;">seconds</span>
-            <span class="form-tips" style="font-size: smaller;">For connections in pool.</span>
+            <span class="form-tips">For connections in pool.</span>
         </div>
         <div class="form-row">
             <label for="node-config-input-loginTimeout"><i class="fa fa-sign-in"></i> Login Timeout</label>
             <input type="number" id="node-config-input-loginTimeout" placeholder="5" style="width: 80px;" />
             <span style="margin-left: 5px;">seconds</span>
-            <span class="form-tips" style="font-size: smaller;">For establishing new connections.</span>
+            <span class="form-tips">For establishing new connections.</span>
         </div>
         <div class="form-row">
             <label for="node-config-input-queryTimeoutSeconds"><i class="fa fa-hourglass-half"></i> Query Timeout</label>
@@ -244,11 +250,11 @@
     </div>
     
     <div class="form-section-header"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-exclamation-triangle"></i> Error Handling & Retry</h4></div>
-    <div class="form-section-content" style="display: none;">
+    <div class="form-section-content">
         <div class="form-row">
             <label for="node-config-input-retryFreshConnection" style="width: auto;"><i class="fa fa-refresh"></i> Retry with fresh connection</label>
             <input type="checkbox" id="node-config-input-retryFreshConnection" style="display: inline-block; width: auto; vertical-align: top;" />
-            <span class="form-tips" style="font-size: smaller;">If a pooled connection fails, try once with a new one.</span>
+            <span class="form-tips">If a pooled connection fails, try once with a new one.</span>
         </div>
         <div class="retry-options" style="padding-left: 20px;">
             <div class="form-row">
@@ -259,13 +265,27 @@
             <div class="form-row">
                 <label for="node-config-input-retryOnMsg" style="width: auto;"><i class="fa fa-envelope-o"></i> Retry on new message</label>
                 <input type="checkbox" id="node-config-input-retryOnMsg" style="display: inline-block; width: auto; vertical-align: top;" />
-                <span class="form-tips" style="font-size: smaller;">If waiting, a new message triggers immediate retry.</span>
+                <span class="form-tips">If waiting, a new message triggers immediate retry.</span>
             </div>
         </div>
     </div>
 
+    <div class="form-section-header"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-power-off"></i> Shutdown Options</h4></div>
+    <div class="form-section-content">
+        <div class="form-row">
+            <label for="node-config-input-fireAndForgetOnClose" style="width: auto;">
+                <i class="fa fa-rocket"></i> Fast close (Fire-and-forget)
+            </label>
+            <input type="checkbox" id="node-config-input-fireAndForgetOnClose" style="display: inline-block; width: auto; vertical-align: top;">
+            <span class="form-tips">
+                <b>Warning:</b> If checked, Node-RED will not wait for the pool to close during deploy/shutdown.
+                This can prevent hangs with problematic drivers but may leave orphaned connections on the DB server. Use with caution.
+            </span>
+        </div>
+    </div>
+
     <div class="form-section-header"><h4><i class="fa fa-caret-right"></i> <i class="fa fa-wrench"></i> Advanced</h4></div>
-    <div class="form-section-content" style="display: none;">
+    <div class="form-section-content">
          <div class="form-row">
             <label for="node-config-input-syntaxtick" style="width: auto;"><i class="fa fa-check-square-o"></i> Syntax Checker</label>
             <input type="checkbox" id="node-config-input-syntaxtick" style="display: inline-block; width: auto; vertical-align: top;" />
@@ -341,7 +361,7 @@ A **Test Connection** button in the configuration panel allows you to instantly 
 - **`Increment Pool Size`**: The number of connections to create when the pool is exhausted. Default: 5.
 - **`Max Pool Size`**: The maximum number of connections allowed in the pool. Default: 15.
 - **`Shrink Pool`**: If checked, reduces the number of connections to `Initial Pool Size` when they are returned to the pool if the pool has grown. Default: true.
-- **`Idle Timeout`**: The number of seconds for a connection in the pool to remain idle before closing. Default: 3 seconds.
+- **`Idle Timeout`**: The number of seconds for a connection in the pool to remain idle before closing. Default: 3 seconds. (Refers to the `connectionTimeout` property of the `odbc` library's pool options).
 - **`Login Timeout`**: The number of seconds for an attempt to establish a new connection to succeed. Default: 5 seconds.
 - **`Query Timeout`**: The number of seconds for a query to execute before timing out. A value of **0** means infinite or uses the driver/database default. Default: 0 seconds.
 
@@ -349,6 +369,13 @@ A **Test Connection** button in the configuration panel allows you to instantly 
 - **`Retry with fresh connection`**: If a query fails using a connection from the pool, the node will try once more with a brand new, direct connection. If this succeeds, the entire connection pool is reset to clear any potentially stale connections.
 - **`Retry Delay`**: If all immediate attempts (pooled and, if enabled, fresh connection) fail, this sets a delay in seconds before another retry is attempted for the incoming message. A value of **0** disables this timed retry mechanism.
 - **`Retry on new message`**: If the node is waiting for a timed retry (due to `Retry Delay`), a new incoming message can, if this is checked, override the timer and trigger an immediate retry of the *original* message that failed.
+
+### Shutdown Options
+- **`Fast close (Fire-and-forget)`**: 
+    - **Warning:** When checked, Node-RED will not wait for the connection pool to properly close during a deploy or shutdown. 
+    - This option can prevent Node-RED from hanging if specific ODBC drivers have issues closing connections quickly. 
+    - However, enabling this may result in orphaned connections on the database server, potentially consuming server resources. 
+    - It is recommended to leave this unchecked unless you are experiencing hangs during Node-RED deploys or shutdowns related to this config node. Default: Unchecked.
 
 ### Advanced
 - **`syntaxChecker`**: If activated, the query string will be parsed and appended to the output message at `msg.parsedQuery`.
